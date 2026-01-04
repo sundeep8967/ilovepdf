@@ -132,6 +132,9 @@ class TextStyleInfo {
   final bool isItalic;
   final double x;
   final double y;
+  final double width;
+  final double height;
+  final int rotation;
 
   TextStyleInfo({
     this.found = false,
@@ -140,6 +143,9 @@ class TextStyleInfo {
     this.isItalic = false,
     this.x = 0.0,
     this.y = 0.0,
+    this.width = 0.0,
+    this.height = 0.0,
+    this.rotation = 0,
   });
 
   factory TextStyleInfo.fromJson(Map<String, dynamic> json) {
@@ -152,6 +158,9 @@ class TextStyleInfo {
       isItalic: json['isItalic'] == true,
       x: (json['x'] as num).toDouble(),
       y: (json['y'] as num).toDouble(),
+      width: (json['width'] as num?)?.toDouble() ?? 0.0,
+      height: (json['height'] as num?)?.toDouble() ?? 0.0,
+      rotation: (json['rotation'] as num?)?.toInt() ?? 0,
     );
   }
 }

@@ -38,6 +38,24 @@ class _EditorScreenState extends State<EditorScreen> {
   // Edit history
   final List<models.EditOperation> _editHistory = [];
 
+  // Manual Drag Edit State
+  bool _isManualEditing = false;
+  Rect? _selectionRect;
+  Offset _dragOffset = Offset.zero;
+  TextStyleInfo? _editingStyle;
+  String _editingText = '';
+  double _editingFontSize = 12.0;
+  bool _editingBold = false;
+  bool _editingItalic = false;
+  Offset? _initialDragPos;
+  double _editScaleFactor = 1.0;
+  Rect? _localSelectionRect;
+  final GlobalKey _stackKey = GlobalKey();
+  
+  // Magnifier State
+  bool _isZoomEnabled = true; // Default to ON as requested
+  bool _isDragging = false;
+
   @override
   void initState() {
     super.initState();
@@ -97,6 +115,7 @@ class _EditorScreenState extends State<EditorScreen> {
       DebugLogger.debug('Text selected', '"${details.selectedText}"');
       setState(() {
         _selectedText = details.selectedText;
+        _selectionRect = details.globalSelectedRegion;
       });
     } else {
       if (mounted) {
@@ -107,7 +126,7 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
-  // Manual Mode: Inspect and Advanced Edit
+
   Future<void> _handleManualEdit() async {
     if (_selectedText == null) return;
     
@@ -116,7 +135,7 @@ class _EditorScreenState extends State<EditorScreen> {
     // 1. Inspect Text Style
     final styleInfo = await PdfService().inspectText(
       path: _currentPath,
-      searchText: _selectedText!,
+      searchText: _selectedText!.trim(), // Trim to avoid whitespace issues
       pageNumber: _pdfController.pageNumber - 1,
     );
     
@@ -124,176 +143,356 @@ class _EditorScreenState extends State<EditorScreen> {
     
     if (!mounted) return;
     
-    // 2. Show Advanced Dialog
-    await _showAdvancedEditDialog(styleInfo);
+    // 2. Determine initial position & Scale
+    Offset initialPos = const Offset(100, 100);
+    // Default scale to device pixel ratio (usually ~3.0) to prevent hypersensitivity if width not found
+    double scale = MediaQuery.of(context).devicePixelRatio;
+    Rect? localRect;
+    
+    if (_selectionRect != null) {
+      if (_selectionRect!.width > 0 && styleInfo.width > 0) {
+        scale = _selectionRect!.width / styleInfo.width;
+      }
+      
+      // Convert global to local
+      final RenderBox? stackBox = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+      if (stackBox != null) {
+        final stackTopLeft = stackBox.localToGlobal(Offset.zero);
+        DebugLogger.info('Coordinate Debug', 'SelectionRect Global: ${_selectionRect!.topLeft}, Stack Global: $stackTopLeft');
+        
+        initialPos = stackBox.globalToLocal(_selectionRect!.topLeft);
+        
+        // CORRECTION: Small fixed nudge (5px) to account for padding.
+        // Full height (30px) and Half height (15px) were too high ("Upper").
+        // Zero shift was too low ("Came Down").
+        // 5px should bridge the gap caused by internal padding.
+        initialPos -= const Offset(0, 5);
+        
+        DebugLogger.info('Coordinate Debug', 'Calculated InitialPos (Local) Nudged: $initialPos');
+
+        // Calculate local rect for the white cover
+        localRect = initialPos & _selectionRect!.size;
+      } else {
+        initialPos = _selectionRect!.topLeft; 
+        localRect = _selectionRect;
+        DebugLogger.warning('Coordinate Debug', 'StackBox not found, using raw rect');
+      }
+    }
+
+    // 3. Enter Manual Edit Mode
+    setState(() {
+      _isManualEditing = true;
+      _editingStyle = styleInfo;
+      _editingText = _selectedText!;
+      _editingFontSize = styleInfo.fontSize > 0 ? styleInfo.fontSize : 12.0;
+      _editingBold = styleInfo.isBold;
+      _editingItalic = styleInfo.isItalic;
+      _dragOffset = initialPos;
+      _initialDragPos = initialPos;
+      _editScaleFactor = scale;
+      _localSelectionRect = localRect;
+    });
   }
 
-  Future<void> _showAdvancedEditDialog(TextStyleInfo info) async {
-    final textController = TextEditingController(text: _selectedText);
-    
-    // State variables for the dialog
-    double fontSize = info.fontSize;
-    bool isBold = info.isBold;
-    bool isItalic = info.isItalic;
-    double xOffset = 0;
-    double yOffset = 0;
-    
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1A1A2E),
-              title: const Text('Advanced Edit', style: TextStyle(color: Colors.white)),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Text Input
-                    TextField(
-                      controller: textController,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: const InputDecoration(
-                        labelText: 'Text Content',
-                        labelStyle: TextStyle(color: Colors.white70),
-                        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    
-                    // Style Toggles
-                    const Text('Style:', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        _StyleToggle(
-                          icon: Icons.format_bold,
-                          isActive: isBold,
-                          onTap: () => setState(() => isBold = !isBold),
-                        ),
-                        const SizedBox(width: 8),
-                        _StyleToggle(
-                          icon: Icons.format_italic,
-                          isActive: isItalic,
-                          onTap: () => setState(() => isItalic = !isItalic),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    
-                    // Size Control
-                    const Text('Size:', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    Row(
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.remove_circle_outline, color: Colors.white70),
-                          onPressed: () => setState(() => fontSize = (fontSize - 0.5).clamp(4.0, 72.0)),
-                        ),
-                        Text(fontSize.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        IconButton(
-                          icon: const Icon(Icons.add_circle_outline, color: Colors.white70),
-                          onPressed: () => setState(() => fontSize = (fontSize + 0.5).clamp(4.0, 72.0)),
-                        ),
-                      ],
-                    ),
-                    
-                    // Position Nudge
-                    const SizedBox(height: 8),
-                    const Text('Position Nudge:', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                    const SizedBox(height: 8),
-                    Center(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black26,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: const EdgeInsets.all(8),
-                        child: Column(
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.arrow_drop_up, color: Colors.white),
-                              onPressed: () => setState(() => yOffset += 1), // Handled as +Y in native? We'll see.
-                              tooltip: 'Move Up',
-                            ),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.arrow_left, color: Colors.white),
-                                  onPressed: () => setState(() => xOffset -= 1),
-                                ),
-                                const SizedBox(width: 20),
-                                IconButton(
-                                  icon: const Icon(Icons.arrow_right, color: Colors.white),
-                                  onPressed: () => setState(() => xOffset += 1),
-                                ),
-                              ],
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
-                              onPressed: () => setState(() => yOffset -= 1),
-                              tooltip: 'Move Down',
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Center(child: Text('X: $xOffset, Y: $yOffset', style: const TextStyle(color: Colors.white30, fontSize: 10))),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    Navigator.pop(context);
-                    await _applyAdvancedEdit(
-                      textController.text, 
-                      _pdfController.pageNumber, 
-                      fontSize, isBold, isItalic, xOffset, yOffset
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE94560)),
-                  child: const Text('Apply'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+  Widget _buildStyleToggle({required IconData icon, required bool isActive, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blueAccent : Colors.white10,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isActive ? Colors.blue : Colors.transparent),
+        ),
+        child: Icon(icon, color: Colors.white, size: 20),
+      ),
     );
   }
 
-  Future<void> _applyAdvancedEdit(String newText, int pageNumber, double fontSize, bool isBold, bool isItalic, double xOffset, double yOffset) async {
+  List<Widget> _buildManualEditOverlay() {
+    return [
+      // 0. White Cover (Eraser) - Hides original text
+      if (_localSelectionRect != null)
+        Positioned(
+          left: _localSelectionRect!.left,
+          top: _localSelectionRect!.top,
+          width: _localSelectionRect!.width,
+          height: _localSelectionRect!.height,
+          child: Container(
+            color: Colors.white,
+          ),
+        ),
+
+      // 1. White Cover for Pink Markers (at EXACT drag position)
+      // Covers pink selection circles so magnifier sees clean white background.
+      Positioned(
+        left: _dragOffset.dx,
+        top: _dragOffset.dy - 10, // Extend above to cover marker circles
+        child: IgnorePointer(
+          child: Container(
+            width: 300, // Wide enough to cover text + markers
+            height: 40, // Tall enough to cover markers above/below
+            color: Colors.white,
+          ),
+        ),
+      ),
+
+      // 2. Clean Text Layer (EXACT drag position, NO border)
+      // This is what the Magnifier will SEE and magnify.
+      // Placed AFTER white cover so text is on top.
+      Positioned(
+        left: _dragOffset.dx + 4, // Match padding
+        top: _dragOffset.dy + 2,  // Match padding
+        child: IgnorePointer(
+          child: Text(
+            _editingText,
+            style: TextStyle(
+              fontSize: _editingFontSize * _editScaleFactor,
+              fontWeight: _editingBold ? FontWeight.bold : FontWeight.normal,
+              fontStyle: _editingItalic ? FontStyle.italic : FontStyle.normal,
+              color: Colors.black,
+              fontFamily: 'Helvetica',
+            ),
+          ),
+        ),
+      ),
+
+      // 2. Magnifier (Zoom Effect) - Wide View
+      // Now simply magnifies the Clean Text above (which is at exact position).
+      if (_isZoomEnabled)
+        Positioned(
+          left: _dragOffset.dx - 140, // Center wide box
+          top: _dragOffset.dy - 120, // Float higher
+          child: SizedBox(
+            width: 280,
+            height: 80,
+            child: RawMagnifier(
+              size: const Size(280, 80),
+              decoration: MagnifierDecoration(
+                shape: RoundedRectangleBorder(
+                  side: const BorderSide(color: Colors.blueAccent, width: 2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                shadows: const [
+                  BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 4))
+                ],
+              ),
+              magnificationScale: 1.5,
+              focalPointOffset: const Offset(0, 80), 
+            ),
+          ),
+        ),
+
+      // 2. Draggable Text (The UI Control)
+      // Visual: HAS Blue Border (User Request).
+      // Stack: Above Magnifier (so Magnifier looks "under" it and sees only PDF).
+      Positioned(
+        left: _dragOffset.dx,
+        top: _dragOffset.dy,
+        child: GestureDetector(
+          onPanDown: (_) => setState(() => _isDragging = true), 
+          onPanCancel: () => setState(() => _isDragging = false),
+          onPanEnd: (_) => setState(() => _isDragging = false),
+          onPanUpdate: (details) {
+            setState(() {
+              _dragOffset += details.delta;
+            });
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.9),
+              boxShadow: const [
+                 BoxShadow(
+                   color: Colors.black26, 
+                   blurRadius: 4,
+                   offset: Offset(2, 2),
+                 ),
+              ],
+              border: Border.all(color: Colors.blueAccent, width: 1), // Border visible here!
+            ),
+            child: Text(
+              _editingText,
+              style: TextStyle(
+                fontSize: _editingFontSize * _editScaleFactor,
+                fontWeight: _editingBold ? FontWeight.bold : FontWeight.normal,
+                fontStyle: _editingItalic ? FontStyle.italic : FontStyle.normal,
+                color: Colors.black,
+                fontFamily: 'Helvetica',
+              ),
+            ),
+          ),
+        ),
+      ),
+      
+      // 2. Control Panel
+      Positioned(
+        bottom: 0,
+        left: 0,
+        right: 0,
+        child: Container(
+          color: const Color(0xFF1A1A2E),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Text Field
+              TextField(
+                controller: TextEditingController(text: _editingText)
+                  ..selection = TextSelection.collapsed(offset: _editingText.length),
+                onChanged: (val) => setState(() => _editingText = val),
+                 style: const TextStyle(color: Colors.white),
+                 decoration: const InputDecoration(
+                   labelText: 'Edit Text',
+                   labelStyle: TextStyle(color: Colors.white70),
+                   border: OutlineInputBorder(),
+                 ),
+              ),
+              const SizedBox(height: 12),
+              
+              // Controls
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Style
+                  Row(
+                    children: [
+                      _buildStyleToggle(
+                        icon: Icons.format_bold,
+                        isActive: _editingBold,
+                        onTap: () => setState(() => _editingBold = !_editingBold),
+                      ),
+                      const SizedBox(width: 8),
+                      _buildStyleToggle(
+                        icon: Icons.format_italic,
+                        isActive: _editingItalic,
+                        onTap: () => setState(() => _editingItalic = !_editingItalic),
+                      ),
+                      const SizedBox(width: 16),
+                      // Zoom Toggle
+                      _buildStyleToggle(
+                        icon: Icons.zoom_in,
+                        isActive: _isZoomEnabled, // New state
+                        onTap: () => setState(() => _isZoomEnabled = !_isZoomEnabled),
+                      ),
+                    ],
+                  ),
+                  
+                  // Size
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.remove, color: Colors.white),
+                        onPressed: () => setState(() => _editingFontSize = (_editingFontSize - 0.5).clamp(4.0, 72.0)),
+                      ),
+                      Text(
+                        _editingFontSize.toStringAsFixed(1),
+                        style: const TextStyle(color: Colors.white),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add, color: Colors.white),
+                        onPressed: () => setState(() => _editingFontSize = (_editingFontSize + 0.5).clamp(4.0, 72.0)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              
+              // Actions
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => setState(() => _isManualEditing = false),
+                    child: const Text('Cancel'),
+                  ),
+                  const SizedBox(width: 16),
+                  ElevatedButton(
+                    onPressed: _applyManualEdit,
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE94560)),
+                    child: const Text('Apply'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    ];
+  }
+
+  Future<void> _applyManualEdit() async {
     setState(() => _isLoading = true);
+    
+    // Calculate Delta (Pixels -> PDF Points)
+    final pixelDelta = _dragOffset - (_initialDragPos ?? Offset.zero);
+    
+    // Standard Scale
+    double deltaX = pixelDelta.dx / _editScaleFactor;
+    double deltaY = pixelDelta.dy / _editScaleFactor;
+
+    // Apply Rotation Correction
+    // Visual Up (-Y) usually maps to PDF Up (+Y) in standard (0 deg) files.
+    // Normalized Delta: Assume Standard PDF (Bottom-Up)
+    
+    double pdfDeltaX = 0;
+    double pdfDeltaY = 0;
+    
+    final int rotation = _editingStyle?.rotation ?? 0;
+    DebugLogger.info('Applying Edit with Rotation', '$rotation degrees');
+
+    switch (rotation) {
+      case 90:
+        pdfDeltaX = deltaY;       // Drag Right -> Move Up?
+        pdfDeltaY = deltaX;       // Drag Down -> Move Right?
+        break;
+      case 180:
+        pdfDeltaX = -deltaX;      // Drag Right -> Move Left
+        pdfDeltaY = deltaY;       // Drag Down (+Y) -> Move Up (+Y in rotated frame)? No.
+                                  // 180 means Visual Down aligns with PDF Up.
+                                  // So Drag Down (+Y) -> Increase PDF Y.
+        break;
+      case 270:
+        pdfDeltaX = -deltaY;
+        pdfDeltaY = -deltaX;
+        break;
+      case 0:
+      default:
+        pdfDeltaX = deltaX;
+        // Inverted Y Logic: Drag Down (+Y visual) -> Decrease PDF Y (Bottom-Up)
+        pdfDeltaY = -deltaY; 
+        break;
+    }
+
+    DebugLogger.info('Delta Calc', 'Px: $pixelDelta, Scale: $_editScaleFactor -> PDF Delta: ($pdfDeltaX, $pdfDeltaY)');
+    
     final newPath = await PdfService().replaceTextAdvanced(
       path: _currentPath,
       searchText: _selectedText!,
-      newText: newText,
-      pageNumber: pageNumber - 1,
-      fontSize: fontSize,
-      isBold: isBold,
-      isItalic: isItalic,
-      xOffset: xOffset,
-      yOffset: yOffset, // Send raw, let native handle direction
+      newText: _editingText,
+      pageNumber: _pdfController.pageNumber - 1,
+      fontSize: _editingFontSize,
+      isBold: _editingBold,
+      isItalic: _editingItalic,
+      xOffset: pdfDeltaX,
+      yOffset: pdfDeltaY,
     );
+    
+    setState(() {
+      _isLoading = false;
+      _isManualEditing = false; // Exit mode
+    });
     
     if (newPath != null) {
       setState(() {
         _currentPath = newPath;
         _hasChanges = true;
         _selectedText = null;
-        _isLoading = false;
+        _selectionRect = null; // Clear selection
       });
       DebugLogger.success('Advanced Edit Applied');
     } else {
-      setState(() => _isLoading = false);
       DebugLogger.error('Edit Failed');
     }
   }
@@ -636,13 +835,14 @@ class _EditorScreenState extends State<EditorScreen> {
           Expanded(
             flex: _showDebugPanel ? 2 : 1,
             child: Stack(
+              key: _stackKey,
               children: [
                 SfPdfViewer.file(
                   File(_currentPath),
                   key: ValueKey(_currentPath),
                   controller: _pdfController,
                   canShowTextSelectionMenu: false,  // Disabled - use our Edit Text button instead
-                  enableTextSelection: true,
+                  enableTextSelection: !_isManualEditing, // Disable native selection while dragging
                   onTextSelectionChanged: _onTextSelectionChanged,
                 ),
                 
@@ -666,6 +866,10 @@ class _EditorScreenState extends State<EditorScreen> {
                       ),
                     ),
                   ),
+
+                // Manual Edit Overlay (Drag & Controls)
+                if (_isManualEditing)
+                  ..._buildManualEditOverlay(),
               ],
             ),
           ),
@@ -746,7 +950,7 @@ class _EditorScreenState extends State<EditorScreen> {
       ),
       
       // Edit FAB
-      floatingActionButton: _selectedText != null
+      floatingActionButton: (_selectedText != null && !_isManualEditing)
           ? FloatingActionButton.extended(
               onPressed: () {
                 if (widget.initialMethod == ReplacementMethod.manualMode) {
@@ -793,30 +997,4 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 }
 
-class _StyleToggle extends StatelessWidget {
-  final IconData icon;
-  final bool isActive;
-  final VoidCallback onTap;
 
-  const _StyleToggle({
-    required this.icon,
-    required this.isActive,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: isActive ? Colors.blueAccent : Colors.white10,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: isActive ? Colors.blue : Colors.transparent),
-        ),
-        child: Icon(icon, color: Colors.white, size: 20),
-      ),
-    );
-  }
-}

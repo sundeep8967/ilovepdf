@@ -127,6 +127,7 @@ class PdfTextEditor(private val context: Context) {
         val document = PDDocument.load(inputFile)
         
         try {
+            val page = document.getPage(pageNumber)
             val stripper = PositionTextStripper(searchText)
             stripper.sortByPosition = true
             stripper.startPage = pageNumber + 1
@@ -145,6 +146,9 @@ class PdfTextEditor(private val context: Context) {
                 json.put("isItalic", hit.isItalic)
                 json.put("x", hit.x)
                 json.put("y", hit.y)
+                json.put("width", hit.width)
+                json.put("height", hit.height)
+                json.put("rotation", page.rotation)
                 return json.toString()
             } else {
                 return "{\"found\": false}"
