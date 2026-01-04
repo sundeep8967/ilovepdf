@@ -1,0 +1,21 @@
+{
+    "name": "pdf-editor-server",
+    "version": "1.0.0",
+    "description": "PDF to JSON converter using pdf2json and pdf-lib",
+    "main": "index.js",
+    "type": "module",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "node --watch index.js",
+        "build-bundle": "node build-bundle.js"
+    },
+    "dependencies": {
+        "cors": "^2.8.5",
+        "express": "^4.18.2",
+        "pdf-lib": "^1.17.1",
+        "pdf2json": "^3.1.4"
+    },
+    "devDependencies": {
+        "esbuild": "^0.20.0"
+    }
+}
