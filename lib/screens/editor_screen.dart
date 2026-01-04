@@ -161,13 +161,42 @@ class _EditorScreenState extends State<EditorScreen> {
 
     if (result != null && result != _selectedText) {
       DebugLogger.info('User confirmed edit', '"$_selectedText" → "$result"');
-      await _replaceText(_selectedText!, result, currentPage);
+      
+      // Ask user for alignment method preference
+      if (!mounted) return;
+      final method = await showDialog<ReplacementMethod>(
+        context: context,
+        builder: (context) => SimpleDialog(
+          backgroundColor: const Color(0xFF1A1A2E),
+          title: const Text('Choose Alignment', style: TextStyle(color: Colors.white)),
+          children: [
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, ReplacementMethod.visual),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Text('Visual Alignment (Recommended)', style: TextStyle(color: Colors.white)),
+              ),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, ReplacementMethod.strict),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Text('Strict Alignment (Native)', style: TextStyle(color: Colors.white70)),
+              ),
+            ),
+          ],
+        ),
+      );
+      
+      if (method != null) {
+        await _replaceText(_selectedText!, result, currentPage, method);
+      }
     } else {
       DebugLogger.debug('Edit cancelled');
     }
   }
 
-  Future<void> _replaceText(String oldText, String newText, int pageNumber) async {
+  Future<void> _replaceText(String oldText, String newText, int pageNumber, ReplacementMethod method) async {
     setState(() => _isLoading = true);
     DebugLogger.info('Starting text replacement...');
 
@@ -176,6 +205,7 @@ class _EditorScreenState extends State<EditorScreen> {
       searchText: oldText,
       newText: newText,
       pageNumber: pageNumber - 1, // 0-indexed
+      method: method,
     );
 
     if (newPath != null) {

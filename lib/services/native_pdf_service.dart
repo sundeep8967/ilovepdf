@@ -27,6 +27,12 @@ class FontInfo {
   String toString() => 'FontInfo(name=$fontName, size=$fontSize, bold=$isBold, italic=$isItalic)';
 }
 
+/// Method to use for text replacement alignment
+enum ReplacementMethod {
+  visual, // Manual heuristic (Visual Match)
+  strict, // Library default (Strict/Native)
+}
+
 class NativePdfService {
   
   /// Extract all text elements from a PDF with their positions
@@ -123,9 +129,11 @@ class NativePdfService {
     required String searchText,
     required String newText,
     required int pageNumber,
+    ReplacementMethod method = ReplacementMethod.visual,
   }) async {
     try {
       DebugLogger.info('=== TEXT REPLACEMENT START ===');
+      DebugLogger.info('Method', method == ReplacementMethod.visual ? 'Visual Alignment' : 'Strict Alignment');
       DebugLogger.info('Search text', '"$searchText"');
       DebugLogger.info('New text', '"$newText"');
       DebugLogger.info('Page number', '$pageNumber (0-indexed)');
@@ -169,7 +177,7 @@ class NativePdfService {
         final fontInfo = _extractFontInfo(extractor, pageNumber, bounds, searchText);
         DebugLogger.info('Detected font', fontInfo.toString());
         
-        _drawTextOverlay(page, bounds, newText, fontInfo);
+        _drawTextOverlay(page, bounds, newText, fontInfo, method);
         DebugLogger.success('Text replaced at first match');
         
       } else {
@@ -222,7 +230,7 @@ class NativePdfService {
           final fontInfo = _extractFontInfoFromLine(matchingLine, matchStart);
           DebugLogger.info('Detected font from line', fontInfo.toString());
           
-          _drawTextOverlay(page, matchBounds, newText, fontInfo);
+          _drawTextOverlay(page, matchBounds, newText, fontInfo, method);
           DebugLogger.success('Text replaced via line match');
           
         } else {
@@ -359,8 +367,8 @@ class NativePdfService {
              a.top > b.bottom);
   }
 
-  /// Draw text overlay using the SAME font style as original
-  static void _drawTextOverlay(PdfPage page, Rect bounds, String newText, FontInfo fontInfo) {
+  /// Draw text overlay using specified alignment method
+  static void _drawTextOverlay(PdfPage page, Rect bounds, String newText, FontInfo fontInfo, ReplacementMethod method) {
     final graphics = page.graphics;
     
     // Draw white rectangle to cover old text (with padding)
@@ -370,7 +378,7 @@ class NativePdfService {
       bounds: Rect.fromLTWH(
         bounds.left - padding,
         bounds.top - padding,
-        bounds.width + (padding * 4), // Extra width for new text
+        bounds.width + (padding * 4), 
         bounds.height + (padding * 2),
       ),
     );
@@ -381,7 +389,7 @@ class NativePdfService {
     // Determine the font style
     PdfFontStyle style = PdfFontStyle.regular;
     if (fontInfo.isBold && fontInfo.isItalic) {
-      style = PdfFontStyle.bold; // Combine would need bitwise OR
+      style = PdfFontStyle.bold; 
     } else if (fontInfo.isBold) {
       style = PdfFontStyle.bold;
     } else if (fontInfo.isItalic) {
@@ -393,27 +401,48 @@ class NativePdfService {
     
     // Create font with detected properties
     final font = PdfStandardFont(fontFamily, clampedFontSize, style: style);
-    
-    // Draw new text with BASELINE-CORRECTED alignment
-    // Library alignment caused text to vanish (clipping), so we revert to manual positioning
-    final textSize = font.measureString(newText);
-    final verticalOffset = textSize.height * 0.15;
-    final yPosition = bounds.top - verticalOffset;
-    
-    graphics.drawString(
-      newText,
-      font,
-      brush: PdfSolidBrush(PdfColor(0, 0, 0)), // Black
-      bounds: Rect.fromLTWH(
-        bounds.left, 
-        yPosition,
-        0, 
-        0,
-      ),
-    );
-    
-    DebugLogger.debug('Overlay drawn', 
-      'font=${fontFamily.name} size=$clampedFontSize bold=${fontInfo.isBold} y=$yPosition (top-0.15h) textH=${textSize.height.toStringAsFixed(1)} boundsH=${bounds.height.toStringAsFixed(1)}');
+
+    if (method == ReplacementMethod.strict) {
+      // STRICT: Library Default (Syncfusion Native)
+      // Relies on internal layout engine
+      final format = PdfStringFormat(
+        alignment: PdfTextAlignment.left,
+        lineAlignment: PdfVerticalAlignment.middle,
+      );
+      
+      graphics.drawString(
+        newText,
+        font,
+        brush: PdfSolidBrush(PdfColor(0, 0, 0)), // Black
+        bounds: bounds, // Use exact bounds
+        format: format,
+      );
+      
+      DebugLogger.debug('Overlay drawn', 
+        'Strict Alignment | font=${fontFamily.name} size=$clampedFontSize');
+        
+    } else {
+      // VISUAL: Manual Heuristic (Top - 15%)
+      // Moves up to correct baseline ascent
+      final textSize = font.measureString(newText);
+      final verticalOffset = textSize.height * 0.15;
+      final yPosition = bounds.top - verticalOffset;
+      
+      graphics.drawString(
+        newText,
+        font,
+        brush: PdfSolidBrush(PdfColor(0, 0, 0)), // Black
+        bounds: Rect.fromLTWH(
+          bounds.left, 
+          yPosition,
+          0, 
+          0,
+        ),
+      );
+      
+      DebugLogger.debug('Overlay drawn', 
+        'Visual Alignment | font=${fontFamily.name} size=$clampedFontSize y=$yPosition');
+    }
   }
 
   /// Match font name to closest PdfFontFamily
