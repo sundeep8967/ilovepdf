@@ -53,7 +53,16 @@ class PdfTextEditor(private val context: Context) {
                 val contentStream = PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true)
                 
                 // Calculate cover width
-                val font = PDType1Font.HELVETICA
+                // Match Font Style
+                var font = PDType1Font.HELVETICA
+                if (hit.isBold && hit.isItalic) {
+                    font = PDType1Font.HELVETICA_BOLD_OBLIQUE
+                } else if (hit.isBold) {
+                    font = PDType1Font.HELVETICA_BOLD
+                } else if (hit.isItalic) {
+                    font = PDType1Font.HELVETICA_OBLIQUE
+                }
+                
                 // If fontSize is tiny (e.g. 6.5), it might be scaled. 
                 // Let's rely on the visual width from the hit for the box, but ensure we cover new text
                 // For drawing new text, we must match the size. 
@@ -110,6 +119,132 @@ class PdfTextEditor(private val context: Context) {
         }
     }
 
+    /**
+     * Inspect text to get style and position info
+     */
+    fun inspectText(inputPath: String, searchText: String, pageNumber: Int): String {
+        val inputFile = File(inputPath)
+        val document = PDDocument.load(inputFile)
+        
+        try {
+            val stripper = PositionTextStripper(searchText)
+            stripper.sortByPosition = true
+            stripper.startPage = pageNumber + 1
+            stripper.endPage = pageNumber + 1
+            
+            val dummyOutput = OutputStreamWriter(ByteArrayOutputStream())
+            stripper.writeText(document, dummyOutput)
+            
+            val hits = stripper.hits
+            if (hits.isNotEmpty()) {
+                val hit = hits[0]
+                val json = org.json.JSONObject()
+                json.put("found", true)
+                json.put("fontSize", hit.fontSize)
+                json.put("isBold", hit.isBold)
+                json.put("isItalic", hit.isItalic)
+                json.put("x", hit.x)
+                json.put("y", hit.y)
+                return json.toString()
+            } else {
+                return "{\"found\": false}"
+            }
+        } finally {
+            document.close()
+        }
+    }
+
+    /**
+     * Advanced Replace with Manual Overrides
+     */
+    fun replaceTextAdvanced(
+        inputPath: String, 
+        searchText: String, 
+        newText: String, 
+        pageNumber: Int,
+        fontSizeOverride: Float,
+        isBoldOverride: Boolean,
+        isItalicOverride: Boolean,
+        xOffset: Float,
+        yOffset: Float
+    ): String {
+        android.util.Log.d("PdfTextEditor", "Advanced Replace: '$searchText' -> '$newText'")
+        
+        val inputFile = File(inputPath)
+        val document = PDDocument.load(inputFile)
+        
+        try {
+            val page = document.getPage(pageNumber)
+            
+            val stripper = PositionTextStripper(searchText)
+            stripper.sortByPosition = true
+            stripper.startPage = pageNumber + 1
+            stripper.endPage = pageNumber + 1
+            
+            val dummyOutput = OutputStreamWriter(ByteArrayOutputStream())
+            stripper.writeText(document, dummyOutput)
+            
+            val hits = stripper.hits
+            
+            if (hits.isNotEmpty()) {
+                val hit = hits[0]
+                
+                // 1. SELECT FONT based on Overrides
+                var font = PDType1Font.HELVETICA
+                if (isBoldOverride && isItalicOverride) {
+                    font = PDType1Font.HELVETICA_BOLD_OBLIQUE
+                } else if (isBoldOverride) {
+                    font = PDType1Font.HELVETICA_BOLD
+                } else if (isItalicOverride) {
+                    font = PDType1Font.HELVETICA_OBLIQUE
+                }
+                
+                // 2. CALCULATE SIZES
+                val fontSize = if (fontSizeOverride > 0) fontSizeOverride else hit.fontSize
+                val newTextWidth = font.getStringWidth(newText) / 1000 * fontSize
+                val coverWidth = max(hit.width, newTextWidth) + 4
+                
+                // 3. APPLY OFFSETS
+                // BaselineY is verified correct. We apply user Y offset to it.
+                // Note: Positive Y offset moves UP in PDF coords? No, let's assume standard intuitive
+                // Flutter Y is top-down. PDF Y is bottom-up.
+                // Nudge UP in UI (-Y) should mean +Y in PDF?
+                // Lets be simple: We pass raw offset. If user presses UP, we pass positive yOffset to add to PDF Y.
+                // Wait, PDF Y=0 is bottom. So +Y moves UP.
+                
+                val finalX = hit.x + xOffset
+                val finalY = hit.baselineY + yOffset
+                
+                // Redaction Rect (remains at original position to cover old text)
+                val rectY = hit.baselineY - 3
+                val rectH = hit.fontSize + 6 
+                
+                val contentStream = PDPageContentStream(document, page, PDPageContentStream.AppendMode.APPEND, true, true)
+                
+                // Redact OLD text (original pos)
+                contentStream.setNonStrokingColor(255, 255, 255)
+                contentStream.addRect(hit.x - 2, rectY, coverWidth, rectH)
+                contentStream.fill()
+                
+                // Draw NEW text (offset pos)
+                contentStream.setNonStrokingColor(0, 0, 0)
+                contentStream.beginText()
+                contentStream.setFont(font, fontSize)
+                contentStream.newLineAtOffset(finalX, finalY)
+                contentStream.showText(newText)
+                contentStream.endText()
+                
+                contentStream.close()
+            }
+            
+            val outputFile = File(context.cacheDir, "edited_${System.currentTimeMillis()}.pdf")
+            document.save(outputFile)
+            return outputFile.absolutePath
+        } finally {
+            document.close()
+        }
+    }
+
     // Helper class to find text coordinates
     private class PositionTextStripper(private val targetString: String) : PDFTextStripper() {
         val hits = mutableListOf<TextHit>()
@@ -133,8 +268,22 @@ class PdfTextEditor(private val context: Context) {
                     
                     // Get Raw Baseline from Text Matrix (translateY is index 5 or 2,1)
                     val baselineY = firstChar.textMatrix.translateY
+
+                    // Font Analysis
+                    val fontDescriptor = firstChar.font.fontDescriptor
+                    var isBold = false
+                    var isItalic = false
                     
-                    hits.add(TextHit(x, yFromTop, width, height, firstChar.fontSizeInPt, baselineY))
+                    if (fontDescriptor != null) {
+                        if (fontDescriptor.isForceBold || firstChar.font.name.contains("Bold", ignoreCase = true)) {
+                            isBold = true
+                        }
+                        if (fontDescriptor.isItalic || firstChar.font.name.contains("Italic", ignoreCase = true) || firstChar.font.name.contains("Oblique", ignoreCase = true)) {
+                            isItalic = true
+                        }
+                    }
+                    
+                    hits.add(TextHit(x, yFromTop, width, height, firstChar.fontSizeInPt, baselineY, isBold, isItalic))
                 }
                 searchIndex = foundIndex + 1
             }
@@ -148,6 +297,8 @@ class PdfTextEditor(private val context: Context) {
         val width: Float, 
         val height: Float, 
         val fontSize: Float,
-        val baselineY: Float // Raw PDF Baseline
+        val baselineY: Float, // Raw PDF Baseline
+        val isBold: Boolean,
+        val isItalic: Boolean
     )
 }

@@ -218,6 +218,109 @@ app.post('/apply-edits', async (req, res) => {
     }
 });
 
+/**
+ * Write text at specific coordinates (Manual Add Text)
+ * Body: { pdfPath, pdfBase64, text, pageNumber, x, y }
+ */
+app.post('/write-text', async (req, res) => {
+    const startTime = Date.now();
+
+    try {
+        const { pdfPath, pdfBase64, text, pageNumber, x, y } = req.body;
+
+        let inputPath = pdfPath;
+
+        if (pdfBase64) {
+            inputPath = path.join('/tmp', `input_${Date.now()}.pdf`);
+            const buffer = Buffer.from(pdfBase64, 'base64');
+            await fs.writeFile(inputPath, buffer);
+        }
+
+        if (!inputPath || !text) {
+            return res.status(400).json({
+                error: 'Missing required fields',
+                logs: ['🔴 [ERROR] Missing pdfPath/pdfBase64 or text']
+            });
+        }
+
+        const outputPath = path.join('/tmp', `output_${Date.now()}.pdf`);
+
+        // Import and call writeTextAt
+        const { writeTextAt } = await import('./pdf-processor.js');
+        await writeTextAt(inputPath, text, pageNumber || 0, x || 0, y || 0, outputPath);
+
+        const outputBytes = await fs.readFile(outputPath);
+        const outputBase64 = outputBytes.toString('base64');
+
+        const duration = Date.now() - startTime;
+
+        res.json({
+            success: true,
+            outputPath: outputPath,
+            outputBase64: outputBase64,
+            duration: duration,
+            logs: [`🟢 [SUCCESS] Text written at (${x}, ${y}) in ${duration}ms`]
+        });
+    } catch (error) {
+        log.error('Write text failed', error.message);
+        res.status(500).json({
+            error: error.message,
+            logs: [`🔴 [ERROR] Write text failed: ${error.message}`]
+        });
+    }
+});
+
+/**
+ * Erase area (draw white rectangle)
+ * Body: { pdfPath, pdfBase64, pageNumber, x, y, width, height }
+ */
+app.post('/erase', async (req, res) => {
+    const startTime = Date.now();
+
+    try {
+        const { pdfPath, pdfBase64, pageNumber, x, y, width, height } = req.body;
+
+        let inputPath = pdfPath;
+
+        if (pdfBase64) {
+            inputPath = path.join('/tmp', `input_${Date.now()}.pdf`);
+            const buffer = Buffer.from(pdfBase64, 'base64');
+            await fs.writeFile(inputPath, buffer);
+        }
+
+        if (!inputPath) {
+            return res.status(400).json({
+                error: 'Missing pdfPath or pdfBase64',
+                logs: ['🔴 [ERROR] Missing PDF input']
+            });
+        }
+
+        const outputPath = path.join('/tmp', `output_${Date.now()}.pdf`);
+
+        const { eraseArea } = await import('./pdf-processor.js');
+        await eraseArea(inputPath, pageNumber || 0, x || 0, y || 0, width || 100, height || 20, outputPath);
+
+        const outputBytes = await fs.readFile(outputPath);
+        const outputBase64 = outputBytes.toString('base64');
+
+        const duration = Date.now() - startTime;
+
+        res.json({
+            success: true,
+            outputPath: outputPath,
+            outputBase64: outputBase64,
+            duration: duration,
+            logs: [`🟢 [SUCCESS] Area erased in ${duration}ms`]
+        });
+    } catch (error) {
+        log.error('Erase failed', error.message);
+        res.status(500).json({
+            error: error.message,
+            logs: [`🔴 [ERROR] Erase failed: ${error.message}`]
+        });
+    }
+});
+
 // Start server
 app.listen(PORT, () => {
     log.success(`PDF Editor Server running on http://localhost:${PORT}`);
@@ -226,4 +329,6 @@ app.listen(PORT, () => {
     console.log('  POST /convert      - PDF to JSON');
     console.log('  POST /replace      - Replace text');
     console.log('  POST /apply-edits  - Apply multiple edits');
+    console.log('  POST /write-text   - Write text at coordinates');
+    console.log('  POST /erase        - Erase area (white rectangle)');
 });

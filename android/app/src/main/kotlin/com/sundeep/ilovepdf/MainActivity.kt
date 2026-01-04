@@ -63,6 +63,59 @@ class MainActivity: FlutterActivity() {
                         result.error("INVALID_ARGS", "path, searchText, newText are required", null)
                     }
                 }
+                "inspectText" -> {
+                    val path = call.argument<String>("path")
+                    val searchText = call.argument<String>("searchText")
+                    val pageNumber = call.argument<Int>("pageNumber") ?: 0
+                    
+                    if (path != null && searchText != null) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val json = pdfBridge.inspectText(path, searchText, pageNumber)
+                                withContext(Dispatchers.Main) {
+                                    result.success(json)
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("INSPECT_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    } else {
+                        result.error("INVALID_ARGS", "path and searchText are required", null)
+                    }
+                }
+                "replaceTextAdvanced" -> {
+                    val path = call.argument<String>("path")
+                    val searchText = call.argument<String>("searchText")
+                    val newText = call.argument<String>("newText")
+                    val pageNumber = call.argument<Int>("pageNumber") ?: 0
+                    val fontSize = call.argument<Double>("fontSize")?.toFloat() ?: 0f
+                    val isBold = call.argument<Boolean>("isBold") ?: false
+                    val isItalic = call.argument<Boolean>("isItalic") ?: false
+                    val xOffset = call.argument<Double>("xOffset")?.toFloat() ?: 0f
+                    val yOffset = call.argument<Double>("yOffset")?.toFloat() ?: 0f
+                    
+                    if (path != null && searchText != null && newText != null) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                val outputPath = pdfBridge.replaceTextAdvanced(
+                                    path, searchText, newText, pageNumber, 
+                                    fontSize, isBold, isItalic, xOffset, yOffset
+                                )
+                                withContext(Dispatchers.Main) {
+                                    result.success(outputPath)
+                                }
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    result.error("REPLACE_ADV_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    } else {
+                        result.error("INVALID_ARGS", "path, searchText, newText are required", null)
+                    }
+                }
                 "saveDocument" -> {
                     val inputPath = call.argument<String>("inputPath")
                     val outputPath = call.argument<String>("outputPath")

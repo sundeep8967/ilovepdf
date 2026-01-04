@@ -107,6 +107,197 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  // Manual Mode: Inspect and Advanced Edit
+  Future<void> _handleManualEdit() async {
+    if (_selectedText == null) return;
+    
+    setState(() => _isLoading = true);
+    
+    // 1. Inspect Text Style
+    final styleInfo = await PdfService().inspectText(
+      path: _currentPath,
+      searchText: _selectedText!,
+      pageNumber: _pdfController.pageNumber - 1,
+    );
+    
+    setState(() => _isLoading = false);
+    
+    if (!mounted) return;
+    
+    // 2. Show Advanced Dialog
+    await _showAdvancedEditDialog(styleInfo);
+  }
+
+  Future<void> _showAdvancedEditDialog(TextStyleInfo info) async {
+    final textController = TextEditingController(text: _selectedText);
+    
+    // State variables for the dialog
+    double fontSize = info.fontSize;
+    bool isBold = info.isBold;
+    bool isItalic = info.isItalic;
+    double xOffset = 0;
+    double yOffset = 0;
+    
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1A1A2E),
+              title: const Text('Advanced Edit', style: TextStyle(color: Colors.white)),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Text Input
+                    TextField(
+                      controller: textController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: 'Text Content',
+                        labelStyle: TextStyle(color: Colors.white70),
+                        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white24)),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    
+                    // Style Toggles
+                    const Text('Style:', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        _StyleToggle(
+                          icon: Icons.format_bold,
+                          isActive: isBold,
+                          onTap: () => setState(() => isBold = !isBold),
+                        ),
+                        const SizedBox(width: 8),
+                        _StyleToggle(
+                          icon: Icons.format_italic,
+                          isActive: isItalic,
+                          onTap: () => setState(() => isItalic = !isItalic),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    
+                    // Size Control
+                    const Text('Size:', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline, color: Colors.white70),
+                          onPressed: () => setState(() => fontSize = (fontSize - 0.5).clamp(4.0, 72.0)),
+                        ),
+                        Text(fontSize.toStringAsFixed(1), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        IconButton(
+                          icon: const Icon(Icons.add_circle_outline, color: Colors.white70),
+                          onPressed: () => setState(() => fontSize = (fontSize + 0.5).clamp(4.0, 72.0)),
+                        ),
+                      ],
+                    ),
+                    
+                    // Position Nudge
+                    const SizedBox(height: 8),
+                    const Text('Position Nudge:', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    const SizedBox(height: 8),
+                    Center(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black26,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.all(8),
+                        child: Column(
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.arrow_drop_up, color: Colors.white),
+                              onPressed: () => setState(() => yOffset += 1), // Handled as +Y in native? We'll see.
+                              tooltip: 'Move Up',
+                            ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.arrow_left, color: Colors.white),
+                                  onPressed: () => setState(() => xOffset -= 1),
+                                ),
+                                const SizedBox(width: 20),
+                                IconButton(
+                                  icon: const Icon(Icons.arrow_right, color: Colors.white),
+                                  onPressed: () => setState(() => xOffset += 1),
+                                ),
+                              ],
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
+                              onPressed: () => setState(() => yOffset -= 1),
+                              tooltip: 'Move Down',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Center(child: Text('X: $xOffset, Y: $yOffset', style: const TextStyle(color: Colors.white30, fontSize: 10))),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await _applyAdvancedEdit(
+                      textController.text, 
+                      _pdfController.pageNumber, 
+                      fontSize, isBold, isItalic, xOffset, yOffset
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE94560)),
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _applyAdvancedEdit(String newText, int pageNumber, double fontSize, bool isBold, bool isItalic, double xOffset, double yOffset) async {
+    setState(() => _isLoading = true);
+    final newPath = await PdfService().replaceTextAdvanced(
+      path: _currentPath,
+      searchText: _selectedText!,
+      newText: newText,
+      pageNumber: pageNumber - 1,
+      fontSize: fontSize,
+      isBold: isBold,
+      isItalic: isItalic,
+      xOffset: xOffset,
+      yOffset: yOffset, // Send raw, let native handle direction
+    );
+    
+    if (newPath != null) {
+      setState(() {
+        _currentPath = newPath;
+        _hasChanges = true;
+        _selectedText = null;
+        _isLoading = false;
+      });
+      DebugLogger.success('Advanced Edit Applied');
+    } else {
+      setState(() => _isLoading = false);
+      DebugLogger.error('Edit Failed');
+    }
+  }
+
   Future<void> _showEditDialog() async {
     if (_selectedText == null) return;
 
@@ -216,10 +407,10 @@ class _EditorScreenState extends State<EditorScreen> {
             ),
             const Divider(color: Colors.white24),
             SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, ReplacementMethod.nodeJs),
+              onPressed: () => Navigator.pop(context, ReplacementMethod.manualMode),
               child: const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8.0),
-                child: Text('Option 1: Node.js (Legacy)', style: TextStyle(color: Colors.amber)),
+                child: Text('Option 3: Manual Mode', style: TextStyle(color: Colors.lightGreenAccent)),
               ),
             ),
             SimpleDialogOption(
@@ -247,22 +438,20 @@ class _EditorScreenState extends State<EditorScreen> {
 
     String? newPath;
 
-    if (method == ReplacementMethod.nodeJs) {
-      // Option 1: Node.js Bridge
+    if (method == ReplacementMethod.manualMode) {
+      // Manual Mode: Uses Native backend (style-preserving)
       try {
-        final result = await PdfBridgeService.replaceText(
-          pdfPath: _currentPath,
+        newPath = await PdfService().replaceText(
+          path: _currentPath,
           searchText: oldText,
           newText: newText,
           pageNumber: pageNumber - 1,
         );
-        if (result.success) {
-          newPath = result.outputPath;
-        } else {
-          DebugLogger.error('Node.js replace failed', result.error ?? 'Unknown error');
+        if (newPath == null) {
+          DebugLogger.error('Manual Mode replace failed');
         }
       } catch (e) {
-        DebugLogger.error('Node.js Service Error', e.toString());
+        DebugLogger.error('Manual Mode Error', e.toString());
       }
     } else if (method == ReplacementMethod.legacyNative) {
       // Option 2: Android Native (MethodChannel)
@@ -559,7 +748,13 @@ class _EditorScreenState extends State<EditorScreen> {
       // Edit FAB
       floatingActionButton: _selectedText != null
           ? FloatingActionButton.extended(
-              onPressed: _showEditDialog,
+              onPressed: () {
+                if (widget.initialMethod == ReplacementMethod.manualMode) {
+                  _handleManualEdit();
+                } else {
+                  _showEditDialog();
+                }
+              },
               backgroundColor: const Color(0xFFE94560),
               icon: const Icon(Icons.edit),
               label: const Text('Edit Text'),
@@ -592,8 +787,36 @@ class _EditorScreenState extends State<EditorScreen> {
       _pdfController.clearSelection();
       _pdfController.dispose();
     } catch (e) {
-      DebugLogger.debug('Controller dispose error (expected)', '$e');
+      // Ignore dispose error
     }
     super.dispose();
+  }
+}
+
+class _StyleToggle extends StatelessWidget {
+  final IconData icon;
+  final bool isActive;
+  final VoidCallback onTap;
+
+  const _StyleToggle({
+    required this.icon,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blueAccent : Colors.white10,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isActive ? Colors.blue : Colors.transparent),
+        ),
+        child: Icon(icon, color: Colors.white, size: 20),
+      ),
+    );
   }
 }

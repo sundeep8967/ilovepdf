@@ -59,6 +59,22 @@ class PdfBridgePlugin(private val context: Context) {
         val editor = PdfTextEditor(context)
         return editor.replaceText(path, searchText, newText, pageNumber)
     }
+
+    fun inspectText(path: String, searchText: String, pageNumber: Int): String {
+        val editor = PdfTextEditor(context)
+        return editor.inspectText(path, searchText, pageNumber)
+    }
+
+    fun replaceTextAdvanced(
+        path: String, searchText: String, newText: String, pageNumber: Int,
+        fontSize: Float, isBold: Boolean, isItalic: Boolean, xOffset: Float, yOffset: Float
+    ): String {
+        val editor = PdfTextEditor(context)
+        return editor.replaceTextAdvanced(
+            path, searchText, newText, pageNumber, 
+            fontSize, isBold, isItalic, xOffset, yOffset
+        )
+    }
     
     /**
      * Save document to new location

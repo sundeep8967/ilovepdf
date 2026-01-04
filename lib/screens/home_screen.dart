@@ -136,12 +136,12 @@ class HomeScreen extends StatelessWidget {
             ),
             const SizedBox(height: 16),
 
-            // Option 3: Node.js (Legacy)
+            // Option 3: Manual Mode (Eraser + Add Text)
             ElevatedButton.icon(
-              onPressed: () => _pickAndOpenPdf(context, ReplacementMethod.nodeJs),
-              icon: const Icon(Icons.javascript),
+              onPressed: () => _pickAndOpenPdf(context, ReplacementMethod.manualMode),
+              icon: const Icon(Icons.draw),
               label: const Text(
-                'Edit PDF 3 (Node.js)',
+                'Edit PDF 3 (Manual Mode)',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
               style: _buttonStyle(const Color(0xFF0F3460)),

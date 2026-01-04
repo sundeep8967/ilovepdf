@@ -236,6 +236,146 @@ class PdfBridgeService {
       );
     }
   }
+
+  /// Write text at specific coordinates (Manual Add Text)
+  static Future<PdfEditResult> writeTextAt({
+    required String pdfPath,
+    required String text,
+    required int pageNumber,
+    required double x,
+    required double y,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    
+    try {
+      DebugLogger.info('Writing text at coordinates', '($x, $y)');
+      
+      final file = File(pdfPath);
+      final bytes = await file.readAsBytes();
+      final base64Input = base64Encode(bytes);
+      
+      final response = await http.post(
+        Uri.parse('$serverUrl/write-text'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'pdfBase64': base64Input,
+          'text': text,
+          'pageNumber': pageNumber,
+          'x': x,
+          'y': y,
+        }),
+      ).timeout(const Duration(seconds: 30));
+      
+      stopwatch.stop();
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        
+        if (data['logs'] != null) {
+          DebugLogger.addServerLogs(data['logs'] as List);
+        }
+        
+        if (data['success'] == true && data['outputBase64'] != null) {
+          final outputBytes = base64Decode(data['outputBase64']);
+          final tempDir = Directory.systemTemp;
+          final outputPath = '${tempDir.path}/edited_${DateTime.now().millisecondsSinceEpoch}.pdf';
+          await File(outputPath).writeAsBytes(outputBytes);
+          
+          DebugLogger.success('Text written', outputPath);
+          
+          return PdfEditResult(
+            success: true,
+            outputPath: outputPath,
+            duration: stopwatch.elapsedMilliseconds,
+          );
+        }
+      }
+      
+      final error = jsonDecode(response.body)['error'] ?? 'Unknown error';
+      throw Exception(error);
+      
+    } catch (e) {
+      stopwatch.stop();
+      DebugLogger.error('Write text failed', e);
+      
+      return PdfEditResult(
+        success: false,
+        error: e.toString(),
+        duration: stopwatch.elapsedMilliseconds,
+      );
+    }
+  }
+
+  /// Erase area by drawing white rectangle
+  static Future<PdfEditResult> eraseArea({
+    required String pdfPath,
+    required int pageNumber,
+    required double x,
+    required double y,
+    required double width,
+    required double height,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    
+    try {
+      DebugLogger.info('Erasing area', '($x, $y) size ${width}x$height');
+      
+      final file = File(pdfPath);
+      final bytes = await file.readAsBytes();
+      final base64Input = base64Encode(bytes);
+      
+      final response = await http.post(
+        Uri.parse('$serverUrl/erase'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'pdfBase64': base64Input,
+          'pageNumber': pageNumber,
+          'x': x,
+          'y': y,
+          'width': width,
+          'height': height,
+        }),
+      ).timeout(const Duration(seconds: 30));
+      
+      stopwatch.stop();
+      
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        
+        if (data['logs'] != null) {
+          DebugLogger.addServerLogs(data['logs'] as List);
+        }
+        
+        if (data['success'] == true && data['outputBase64'] != null) {
+          final outputBytes = base64Decode(data['outputBase64']);
+          final tempDir = Directory.systemTemp;
+          final outputPath = '${tempDir.path}/edited_${DateTime.now().millisecondsSinceEpoch}.pdf';
+          await File(outputPath).writeAsBytes(outputBytes);
+          
+          DebugLogger.success('Area erased', outputPath);
+          
+          return PdfEditResult(
+            success: true,
+            outputPath: outputPath,
+            duration: stopwatch.elapsedMilliseconds,
+          );
+        }
+      }
+      
+      final error = jsonDecode(response.body)['error'] ?? 'Unknown error';
+      throw Exception(error);
+      
+    } catch (e) {
+      stopwatch.stop();
+      DebugLogger.error('Erase area failed', e);
+      
+      return PdfEditResult(
+        success: false,
+        error: e.toString(),
+        duration: stopwatch.elapsedMilliseconds,
+      );
+    }
+  }
 }
 
 /// Result of PDF conversion

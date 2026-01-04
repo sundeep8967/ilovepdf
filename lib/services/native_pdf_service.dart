@@ -31,7 +31,7 @@ class FontInfo {
 enum ReplacementMethod {
   visual, // Method 1: Manual heuristic (Visual Match)
   strict, // Method 2: Library default (Strict/Native)
-  nodeJs, // Option 1: Node.js Bridge (Legacy)
+  manualMode, // Option 3: Manual Mode (Eraser + Add Text)
   legacyNative, // Option 2: Android Native Bridge (Legacy)
 }
 

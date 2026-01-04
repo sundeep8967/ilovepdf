@@ -217,4 +217,105 @@ export async function replaceText(pdfPath, searchText, newText, pageNumber, outp
     }
 }
 
+
 export { log };
+
+/**
+ * Write text at specific coordinates (Manual Add Text)
+ * @param {string} pdfPath - Path to input PDF
+ * @param {string} text - Text to write
+ * @param {number} pageNumber - 0-indexed page number
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate (from top, will be converted)
+ * @param {string} outputPath - Path for output PDF
+ */
+export async function writeTextAt(pdfPath, text, pageNumber, x, y, outputPath) {
+    log.info('Writing text at coordinates', `"${text}" at (${x}, ${y}) on page ${pageNumber}`);
+
+    try {
+        const pdfBytes = await fs.readFile(pdfPath);
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const pages = pdfDoc.getPages();
+
+        if (pageNumber < 0 || pageNumber >= pages.length) {
+            throw new Error(`Invalid page number: ${pageNumber}`);
+        }
+
+        const page = pages[pageNumber];
+        const { height } = page.getSize();
+
+        // Convert Y from top-left (Flutter) to bottom-left (PDF)
+        const pdfY = height - y;
+
+        const fontSize = 14; // Default font size
+
+        // Draw the text
+        page.drawText(text, {
+            x: x,
+            y: pdfY,
+            size: fontSize,
+            font: font,
+            color: rgb(0, 0, 0),
+        });
+
+        log.success('Text written successfully');
+
+        const modifiedBytes = await pdfDoc.save();
+        await fs.writeFile(outputPath, modifiedBytes);
+
+        return outputPath;
+    } catch (error) {
+        log.error('Write text failed', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Erase text by drawing white rectangle (Manual Eraser)
+ * @param {string} pdfPath - Path to input PDF
+ * @param {number} pageNumber - 0-indexed page number
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate (from top)
+ * @param {number} width - Width of rectangle
+ * @param {number} height - Height of rectangle
+ * @param {string} outputPath - Path for output PDF
+ */
+export async function eraseArea(pdfPath, pageNumber, x, y, width, rectHeight, outputPath) {
+    log.info('Erasing area', `(${x}, ${y}) size ${width}x${rectHeight} on page ${pageNumber}`);
+
+    try {
+        const pdfBytes = await fs.readFile(pdfPath);
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        const pages = pdfDoc.getPages();
+
+        if (pageNumber < 0 || pageNumber >= pages.length) {
+            throw new Error(`Invalid page number: ${pageNumber}`);
+        }
+
+        const page = pages[pageNumber];
+        const { height: pageHeight } = page.getSize();
+
+        // Convert Y from top-left to bottom-left
+        const pdfY = pageHeight - y - rectHeight;
+
+        // Draw white rectangle
+        page.drawRectangle({
+            x: x,
+            y: pdfY,
+            width: width,
+            height: rectHeight,
+            color: rgb(1, 1, 1),
+        });
+
+        log.success('Area erased successfully');
+
+        const modifiedBytes = await pdfDoc.save();
+        await fs.writeFile(outputPath, modifiedBytes);
+
+        return outputPath;
+    } catch (error) {
+        log.error('Erase area failed', error.message);
+        throw error;
+    }
+}
