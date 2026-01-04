@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:path_provider/path_provider.dart';
@@ -61,6 +62,13 @@ class _EditorScreenState extends State<EditorScreen> {
   void _onTextSelectionChanged(PdfTextSelectionChangedDetails details) {
     // IMPORTANT: Check mounted to prevent setState errors during disposal
     if (!mounted) return;
+    
+    // Avoid setState during build/layout/paint phases (widget tree locked)
+    if (SchedulerBinding.instance.schedulerPhase != SchedulerPhase.idle) {
+      // If we are disposing or building, we simply ignore the update
+      // triggering selection clear during dispose is common in SfPdfViewer
+      return; 
+    }
     
     if (details.selectedText != null && details.selectedText!.isNotEmpty) {
       DebugLogger.debug('Text selected', '"${details.selectedText}"');

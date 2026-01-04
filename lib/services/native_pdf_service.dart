@@ -395,8 +395,7 @@ class NativePdfService {
     final font = PdfStandardFont(fontFamily, clampedFontSize, style: style);
     
     // Draw new text with BASELINE-CORRECTED alignment
-    // Standard PDF drawing often adds top padding (ascent overlap).
-    // Moving UP by ~15% of font size usually aligns the baseline with the original text.
+    // Library alignment caused text to vanish (clipping), so we revert to manual positioning
     final textSize = font.measureString(newText);
     final verticalOffset = textSize.height * 0.15;
     final yPosition = bounds.top - verticalOffset;
