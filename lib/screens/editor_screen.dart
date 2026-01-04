@@ -223,19 +223,20 @@ class _EditorScreenState extends State<EditorScreen> {
           ),
         ),
 
-      // 1. White Cover for Pink Markers (at EXACT drag position)
-      // Covers pink selection circles so magnifier sees clean white background.
-      Positioned(
-        left: _dragOffset.dx,
-        top: _dragOffset.dy - 10, // Extend above to cover marker circles
-        child: IgnorePointer(
-          child: Container(
-            width: 300, // Wide enough to cover text + markers
-            height: 40, // Tall enough to cover markers above/below
-            color: Colors.white,
+      // 1. White Cover for Pink Markers (PRECISE size matching text)
+      // Covers ONLY the pink selection circles, not surrounding context.
+      if (_localSelectionRect != null)
+        Positioned(
+          left: _dragOffset.dx,
+          top: _dragOffset.dy,
+          child: IgnorePointer(
+            child: Container(
+              width: _localSelectionRect!.width + 10, // Just slightly wider than text
+              height: _localSelectionRect!.height + 5, // Match text height
+              color: Colors.white,
+            ),
           ),
         ),
-      ),
 
       // 2. Clean Text Layer (EXACT drag position, NO border)
       // This is what the Magnifier will SEE and magnify.
