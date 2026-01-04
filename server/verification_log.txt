@@ -1,0 +1,40 @@
+Testing PDF text extraction...
+
+Total elements: 101
+
+=== First 30 elements ===
+[0] "Tax Invoice/Bill of Supply/Cash Memo"
+[1] "(Original for Recipient)"
+[2] "*ASSPL-Amazon Seller Services Pvt. Ltd. (FSSAI License No. 10014043001078), ARIPL-Amazon Retail India Pvt. Ltd. (only where Amazon Retail India Pvt. Ltd. fulfillment center is co-located)"
+[3] "Customers desirous of availing input GST credit are requested to create a Business account and purchase on Amazon.in/business from Business eligible offers"
+[4] "Please note that this invoice is not a demand for payment"
+[5] "Page 1 of 1"
+[6] "For R K WorldInfocom Pvt Ltd:"
+[7] "Authorized Signatory"
+[8] "Order Number:"
+[9] "402-7754432-7161942"
+[10] "Invoice Number :"
+[11] "BLR7-5539951"
+[12] "Order Date:"
+[13] "08.11.2025"
+[14] "Invoice Details :"
+[15] "KA-BLR7-1293787125-2526"
+[16] "Invoice Date :"
+[17] "08.11.2025"
+[18] "Sl."
+[19] "No "
+[20] "Description"
+[21] "Unit"
+[22] "Price"
+[23] "Discount Qty "
+[24] "Net"
+[25] "Amount"
+[26] "Tax"
+[27] "Rate"
+[28] "Tax"
+[29] "Type"
+
+=== Elements with "AAE", "564", or "PAN" ===
+[72] "PAN No:" at (43, 597)
+[73] "AAECR0564M" at (92, 597)
+[75] "29AAECR0564M2ZY" at (160, 583)

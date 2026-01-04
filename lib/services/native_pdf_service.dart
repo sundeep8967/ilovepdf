@@ -29,8 +29,10 @@ class FontInfo {
 
 /// Method to use for text replacement alignment
 enum ReplacementMethod {
-  visual, // Manual heuristic (Visual Match)
-  strict, // Library default (Strict/Native)
+  visual, // Method 1: Manual heuristic (Visual Match)
+  strict, // Method 2: Library default (Strict/Native)
+  nodeJs, // Option 1: Node.js Bridge (Legacy)
+  legacyNative, // Option 2: Android Native Bridge (Legacy)
 }
 
 class NativePdfService {

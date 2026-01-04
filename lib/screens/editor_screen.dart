@@ -6,12 +6,19 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/native_pdf_service.dart';
 import '../services/debug_logger.dart';
+import '../services/pdf_bridge_service.dart';
+import '../services/pdf_service.dart';
 import '../models/pdf_document.dart' as models;
 
 class EditorScreen extends StatefulWidget {
   final String pdfPath;
+  final ReplacementMethod? initialMethod;
 
-  const EditorScreen({super.key, required this.pdfPath});
+  const EditorScreen({
+    super.key, 
+    required this.pdfPath,
+    this.initialMethod,
+  });
 
   @override
   State<EditorScreen> createState() => _EditorScreenState();
@@ -26,6 +33,7 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _hasChanges = false;
   String? _selectedText;
   bool _showDebugPanel = false;
+  bool _isDisposed = false;
   
   // Edit history
   final List<models.EditOperation> _editHistory = [];
@@ -43,6 +51,21 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _isLoading = true);
     
     DebugLogger.info('Loading PDF document...');
+    
+    // Copy file to stable location to prevent file_picker cleanup issues
+    try {
+      final originalFile = File(_currentPath);
+      if (await originalFile.exists()) {
+        final directory = await getApplicationDocumentsDirectory();
+        final stablePath = '${directory.path}/working_${DateTime.now().millisecondsSinceEpoch}.pdf';
+        final stableFile = await originalFile.copy(stablePath);
+        _currentPath = stableFile.path;
+        DebugLogger.info('Copied to stable path', stablePath);
+      }
+    } catch (e) {
+      DebugLogger.warning('Could not copy file', e.toString());
+    }
+    
     final doc = await NativePdfService.extractTextElements(_currentPath);
     
     if (mounted) {
@@ -162,7 +185,14 @@ class _EditorScreenState extends State<EditorScreen> {
     if (result != null && result != _selectedText) {
       DebugLogger.info('User confirmed edit', '"$_selectedText" → "$result"');
       
-      // Ask user for alignment method preference
+      // If a specific method was chosen at launch, use it immediately
+      if (widget.initialMethod != null) {
+        if (!mounted) return;
+        await _replaceText(_selectedText!, result, currentPage, widget.initialMethod!);
+        return;
+      }
+
+      // Otherwise ask user for alignment method preference
       if (!mounted) return;
       final method = await showDialog<ReplacementMethod>(
         context: context,
@@ -184,6 +214,21 @@ class _EditorScreenState extends State<EditorScreen> {
                 child: Text('Strict Alignment (Native)', style: TextStyle(color: Colors.white70)),
               ),
             ),
+            const Divider(color: Colors.white24),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, ReplacementMethod.nodeJs),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Text('Option 1: Node.js (Legacy)', style: TextStyle(color: Colors.amber)),
+              ),
+            ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, ReplacementMethod.legacyNative),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.0),
+                child: Text('Option 2: Android Native (Legacy)', style: TextStyle(color: Colors.amber)),
+              ),
+            ),
           ],
         ),
       );
@@ -200,13 +245,50 @@ class _EditorScreenState extends State<EditorScreen> {
     setState(() => _isLoading = true);
     DebugLogger.info('Starting text replacement...');
 
-    final newPath = await NativePdfService.replaceText(
-      pdfPath: _currentPath,
-      searchText: oldText,
-      newText: newText,
-      pageNumber: pageNumber - 1, // 0-indexed
-      method: method,
-    );
+    String? newPath;
+
+    if (method == ReplacementMethod.nodeJs) {
+      // Option 1: Node.js Bridge
+      try {
+        final result = await PdfBridgeService.replaceText(
+          pdfPath: _currentPath,
+          searchText: oldText,
+          newText: newText,
+          pageNumber: pageNumber - 1,
+        );
+        if (result.success) {
+          newPath = result.outputPath;
+        } else {
+          DebugLogger.error('Node.js replace failed', result.error ?? 'Unknown error');
+        }
+      } catch (e) {
+        DebugLogger.error('Node.js Service Error', e.toString());
+      }
+    } else if (method == ReplacementMethod.legacyNative) {
+      // Option 2: Android Native (MethodChannel)
+      try {
+        newPath = await PdfService().replaceText(
+          path: _currentPath,
+          searchText: oldText,
+          newText: newText,
+          pageNumber: pageNumber - 1,
+        );
+        if (newPath == null) {
+          DebugLogger.error('Native Bridge failed', 'Start server or check logs');
+        }
+      } catch (e) {
+        DebugLogger.error('Native Bridge Error', e.toString());
+      }
+    } else {
+      // Option 3: Syncfusion Native (Visual or Strict)
+      newPath = await NativePdfService.replaceText(
+        pdfPath: _currentPath,
+        searchText: oldText,
+        newText: newText,
+        pageNumber: pageNumber - 1, // 0-indexed
+        method: method,
+      );
+    }
 
     if (newPath != null) {
       // Add to history
@@ -218,7 +300,7 @@ class _EditorScreenState extends State<EditorScreen> {
       ));
 
       setState(() {
-        _currentPath = newPath;
+        _currentPath = newPath!;
         _hasChanges = true;
         _selectedText = null;
         _isLoading = false;
@@ -307,10 +389,33 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  Future<void> _handleBackNavigation() async {
+    if (_isDisposed) return;
+    _isDisposed = true;  // Mark as disposed before navigation
+    
+    // Clear selection before navigating to avoid render object issues
+    try {
+      _pdfController.clearSelection();
+    } catch (e) {
+      // Ignore - widget may already be disposed
+    }
+    
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          _handleBackNavigation();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFF1A1A2E),
       appBar: AppBar(
         title: const Text(
           'Edit PDF',
@@ -460,6 +565,7 @@ class _EditorScreenState extends State<EditorScreen> {
               label: const Text('Edit Text'),
             )
           : null,
+      ),
     );
   }
 
@@ -480,8 +586,10 @@ class _EditorScreenState extends State<EditorScreen> {
 
   @override
   void dispose() {
+    _isDisposed = true;
     // Dispose controller safely
     try {
+      _pdfController.clearSelection();
       _pdfController.dispose();
     } catch (e) {
       DebugLogger.debug('Controller dispose error (expected)', '$e');

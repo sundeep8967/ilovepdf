@@ -1,28 +1,52 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'editor_screen.dart';
+import '../services/native_pdf_service.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
-  Future<void> _pickAndOpenPdf(BuildContext context) async {
+  Future<void> _pickAndOpenPdf(BuildContext context, [ReplacementMethod? method]) async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['pdf'],
     );
 
     if (result != null && result.files.single.path != null) {
-      final path = result.files.single.path!;
+      final tempPath = result.files.single.path!;
+      
+      // CRITICAL: Copy file to stable location IMMEDIATELY
+      // file_picker temp files get deleted very quickly
+      String stablePath = tempPath;
+      try {
+        final tempFile = File(tempPath);
+        if (await tempFile.exists()) {
+          final directory = await getApplicationDocumentsDirectory();
+          final fileName = tempPath.split('/').last;
+          stablePath = '${directory.path}/$fileName';
+          await tempFile.copy(stablePath);
+          debugPrint('✅ Copied PDF to stable path: $stablePath');
+        }
+      } catch (e) {
+        debugPrint('⚠️ Could not copy file: $e, using original path');
+      }
+      
       if (context.mounted) {
         Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (context) => EditorScreen(pdfPath: path),
+            builder: (context) => EditorScreen(
+              pdfPath: stablePath,
+              initialMethod: method,
+            ),
           ),
         );
       }
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -88,33 +112,54 @@ class HomeScreen extends StatelessWidget {
             const SizedBox(height: 48),
             
             // Open PDF Button
+            // Option 1: Current / Recommended (Visual/Strict Dialog)
             ElevatedButton.icon(
-              onPressed: () => _pickAndOpenPdf(context),
-              icon: const Icon(Icons.folder_open),
+              onPressed: () => _pickAndOpenPdf(context, null),
+              icon: const Icon(Icons.edit_note),
               label: const Text(
-                'Open PDF',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
+                'Edit PDF (Recommended)',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFE94560),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 40,
-                  vertical: 16,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 8,
-                shadowColor: const Color(0xFFE94560).withOpacity(0.5),
+              style: _buttonStyle(const Color(0xFFE94560)),
+            ),
+            const SizedBox(height: 16),
+
+            // Option 2: Android Native (Legacy)
+            ElevatedButton.icon(
+              onPressed: () => _pickAndOpenPdf(context, ReplacementMethod.legacyNative),
+              icon: const Icon(Icons.android),
+              label: const Text(
+                'Edit PDF 2 (Android Native)',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
               ),
+              style: _buttonStyle(const Color(0xFF0F3460)),
+            ),
+            const SizedBox(height: 16),
+
+            // Option 3: Node.js (Legacy)
+            ElevatedButton.icon(
+              onPressed: () => _pickAndOpenPdf(context, ReplacementMethod.nodeJs),
+              icon: const Icon(Icons.javascript),
+              label: const Text(
+                'Edit PDF 3 (Node.js)',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+              style: _buttonStyle(const Color(0xFF0F3460)),
             ),
           ],
         ),
       ),
+    );
+  }
+  ButtonStyle _buttonStyle(Color color) {
+    return ElevatedButton.styleFrom(
+      backgroundColor: color,
+      foregroundColor: Colors.white,
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+      minimumSize: const Size(280, 56), // Fixed width for alignment
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      elevation: 6,
+      shadowColor: color.withOpacity(0.4),
     );
   }
 }
