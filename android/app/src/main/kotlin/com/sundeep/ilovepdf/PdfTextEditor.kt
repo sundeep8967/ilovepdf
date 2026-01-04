@@ -148,6 +148,7 @@ class PdfTextEditor(private val context: Context) {
                 json.put("y", hit.y)
                 json.put("width", hit.width)
                 json.put("height", hit.height)
+                json.put("baselineY", hit.baselineY) // CRITICAL: Expose Baseline
                 json.put("rotation", page.rotation)
                 return json.toString()
             } else {
@@ -170,9 +171,10 @@ class PdfTextEditor(private val context: Context) {
         isBoldOverride: Boolean,
         isItalicOverride: Boolean,
         xOffset: Float,
-        yOffset: Float
+        yOffset: Float,
+        isAbsolutePositioning: Boolean = false
     ): String {
-        android.util.Log.d("PdfTextEditor", "Advanced Replace: '$searchText' -> '$newText'")
+        android.util.Log.d("PdfTextEditor", "Advanced Replace: '$searchText' -> '$newText' (Abs: $isAbsolutePositioning)")
         
         val inputFile = File(inputPath)
         val document = PDDocument.load(inputFile)
@@ -208,16 +210,21 @@ class PdfTextEditor(private val context: Context) {
                 val newTextWidth = font.getStringWidth(newText) / 1000 * fontSize
                 val coverWidth = max(hit.width, newTextWidth) + 4
                 
-                // 3. APPLY OFFSETS
-                // BaselineY is verified correct. We apply user Y offset to it.
-                // Note: Positive Y offset moves UP in PDF coords? No, let's assume standard intuitive
-                // Flutter Y is top-down. PDF Y is bottom-up.
-                // Nudge UP in UI (-Y) should mean +Y in PDF?
-                // Lets be simple: We pass raw offset. If user presses UP, we pass positive yOffset to add to PDF Y.
-                // Wait, PDF Y=0 is bottom. So +Y moves UP.
+                // 3. APPLY COORDINATES (Absolute or Relative)
+                // If Absolute, xOffset/yOffset ARE the coordinates.
+                // If Relative, they are added to hit.
                 
-                val finalX = hit.x + xOffset
-                val finalY = hit.baselineY + yOffset
+                var finalX = 0f
+                var finalY = 0f
+                
+                if (isAbsolutePositioning) {
+                   finalX = xOffset
+                   finalY = yOffset
+                   android.util.Log.d("PdfTextEditor", "Using Absolute Position: $finalX, $finalY")
+                } else {
+                   finalX = hit.x + xOffset
+                   finalY = hit.baselineY + yOffset
+                }
                 
                 // Redaction Rect (remains at original position to cover old text)
                 val rectY = hit.baselineY - 3

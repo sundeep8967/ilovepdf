@@ -67,12 +67,13 @@ class PdfBridgePlugin(private val context: Context) {
 
     fun replaceTextAdvanced(
         path: String, searchText: String, newText: String, pageNumber: Int,
-        fontSize: Float, isBold: Boolean, isItalic: Boolean, xOffset: Float, yOffset: Float
+        fontSize: Float, isBold: Boolean, isItalic: Boolean, xOffset: Float, yOffset: Float,
+        isAbsolutePositioning: Boolean = false
     ): String {
         val editor = PdfTextEditor(context)
         return editor.replaceTextAdvanced(
             path, searchText, newText, pageNumber, 
-            fontSize, isBold, isItalic, xOffset, yOffset
+            fontSize, isBold, isItalic, xOffset, yOffset, isAbsolutePositioning
         )
     }
     

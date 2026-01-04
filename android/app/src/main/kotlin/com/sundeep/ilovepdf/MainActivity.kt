@@ -95,13 +95,14 @@ class MainActivity: FlutterActivity() {
                     val isItalic = call.argument<Boolean>("isItalic") ?: false
                     val xOffset = call.argument<Double>("xOffset")?.toFloat() ?: 0f
                     val yOffset = call.argument<Double>("yOffset")?.toFloat() ?: 0f
+                    val isAbsolutePositioning = call.argument<Boolean>("isAbsolutePositioning") ?: false
                     
                     if (path != null && searchText != null && newText != null) {
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 val outputPath = pdfBridge.replaceTextAdvanced(
                                     path, searchText, newText, pageNumber, 
-                                    fontSize, isBold, isItalic, xOffset, yOffset
+                                    fontSize, isBold, isItalic, xOffset, yOffset, isAbsolutePositioning
                                 )
                                 withContext(Dispatchers.Main) {
                                     result.success(outputPath)

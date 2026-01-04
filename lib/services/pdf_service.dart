@@ -104,6 +104,7 @@ class PdfService {
     required bool isItalic,
     required double xOffset,
     required double yOffset,
+    bool isAbsolutePositioning = false,
   }) async {
     try {
       final result = await _channel.invokeMethod<String>('replaceTextAdvanced', {
@@ -116,6 +117,7 @@ class PdfService {
         'isItalic': isItalic,
         'xOffset': xOffset,
         'yOffset': yOffset,
+        'isAbsolutePositioning': isAbsolutePositioning,
       });
       return result;
     } on PlatformException catch (e) {
@@ -134,33 +136,34 @@ class TextStyleInfo {
   final double y;
   final double width;
   final double height;
+  final double baselineY; // New Precise Metric
   final int rotation;
 
   TextStyleInfo({
-    this.found = false,
-    this.fontSize = 12.0,
+    required this.found,
+    this.fontSize = 0,
     this.isBold = false,
     this.isItalic = false,
-    this.x = 0.0,
-    this.y = 0.0,
-    this.width = 0.0,
-    this.height = 0.0,
+    this.x = 0,
+    this.y = 0,
+    this.width = 0,
+    this.height = 0,
+    this.baselineY = 0,
     this.rotation = 0,
   });
 
   factory TextStyleInfo.fromJson(Map<String, dynamic> json) {
-    if (json['found'] != true) return TextStyleInfo(found: false);
-    
     return TextStyleInfo(
-      found: true,
-      fontSize: (json['fontSize'] as num).toDouble(),
-      isBold: json['isBold'] == true,
-      isItalic: json['isItalic'] == true,
-      x: (json['x'] as num).toDouble(),
-      y: (json['y'] as num).toDouble(),
-      width: (json['width'] as num?)?.toDouble() ?? 0.0,
-      height: (json['height'] as num?)?.toDouble() ?? 0.0,
-      rotation: (json['rotation'] as num?)?.toInt() ?? 0,
+      found: json['found'] ?? false,
+      fontSize: (json['fontSize'] ?? 0).toDouble(),
+      isBold: json['isBold'] ?? false,
+      isItalic: json['isItalic'] ?? false,
+      x: (json['x'] ?? 0).toDouble(),
+      y: (json['y'] ?? 0).toDouble(),
+      width: (json['width'] ?? 0).toDouble(),
+      height: (json['height'] ?? 0).toDouble(),
+      baselineY: (json['baselineY'] ?? 0).toDouble(),
+      rotation: json['rotation'] ?? 0,
     );
   }
 }

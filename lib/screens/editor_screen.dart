@@ -51,10 +51,21 @@ class _EditorScreenState extends State<EditorScreen> {
   double _editScaleFactor = 1.0;
   Rect? _localSelectionRect;
   final GlobalKey _stackKey = GlobalKey();
+  int _pdfRotation = 0; // PDF page rotation in degrees
   
   // Magnifier State
   bool _isZoomEnabled = true; // Default to ON as requested
   bool _isDragging = false;
+
+  // Erase & Replace Mode State
+  bool _isEraseReplaceMode = false; // false = Drag-to-Move, true = Erase & Replace
+  bool _isErased = false; // Tracks if text has been erased
+  String? _originalText; // Saves original text for Apply operation
+  Offset? _placementPosition; // Where user tapped to place new text
+  bool _isAddingText = false; // Tracks if user is in simple text addition mode (Erase & Replace)
+  bool _isEraseReplaceDrag = false; // True when dragging in Erase & Replace mode (uses simple logic)
+  bool _isDraggingEraseReplace = false; // Separate drag state for Erase & Replace UI
+
 
   @override
   void initState() {
@@ -194,6 +205,67 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  void _eraseSelectedText() async {
+    if (_selectedText == null || _selectionRect == null) return;
+
+    // Save selection info before clearing
+    final String erasedText = _selectedText!;
+    final TextStyleInfo styleInfo = await PdfService().inspectText(
+      path: _currentPath,
+      searchText: _selectedText!.trim(),
+      pageNumber: _pdfController.pageNumber - 1,
+    );
+
+    // Convert selection rect to local coordinates
+    final RenderBox? stackBox = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    Rect? localRect;
+    if (stackBox != null) {
+      // 1. Convert Global Selection TopLeft to Local Coordinate
+      final localTopLeft = stackBox.globalToLocal(_selectionRect!.topLeft);
+      
+      // 2. APPLY OFFSET CORRECTION
+      // Previous -5 correction caused alignment issues.
+      // Instead, we use the raw position but INFLATE the rect by 2.0px on all sides.
+      // This ensures we cover slight padding variances without guessing directions.
+      
+      localRect = (localTopLeft & _selectionRect!.size).inflate(2.0);
+    } else {
+      localRect = _selectionRect;
+    }
+
+    // Calculate Scale used during selection
+    double scale = 1.0;
+    if (_selectionRect != null && styleInfo.width > 0) {
+      scale = _selectionRect!.width / styleInfo.width;
+      // Calculate base scale (scale at zoom 1.0)
+      // This allows us to re-calculate correct scale if user zooms later
+      if (_pdfController.zoomLevel > 0) {
+         _baseScaleFactor = scale / _pdfController.zoomLevel;
+      } else {
+         _baseScaleFactor = scale;
+      }
+      DebugLogger.info('Erase Scale Calc', 'Selection W: ${_selectionRect!.width} / PDF W: ${styleInfo.width} = $scale (Base: $_baseScaleFactor)');
+    }
+
+    setState(() {
+      _isErased = true;
+      _localSelectionRect = localRect; // Keep eraser position
+      _originalText = erasedText; // Save for Apply operation
+      _editingText = erasedText; // Save for later
+      _editingStyle = styleInfo;
+      _editingFontSize = styleInfo.fontSize > 0 ? styleInfo.fontSize : 12.0;
+      _editingBold = styleInfo.isBold;
+      _editingItalic = styleInfo.isItalic;
+      _editScaleFactor = scale; // SAVE SCALE!
+      _pdfRotation = styleInfo.rotation; // SAVE ROTATION!
+      _selectedText = null; // Clear selection
+      _selectionRect = null;
+    });
+
+    // Clear PDF viewer selection
+    _pdfController.clearSelection();
+  }
+
   Widget _buildStyleToggle({required IconData icon, required bool isActive, required VoidCallback onTap}) {
     return GestureDetector(
       onTap: onTap,
@@ -207,6 +279,116 @@ class _EditorScreenState extends State<EditorScreen> {
         child: Icon(icon, color: Colors.white, size: 20),
       ),
     );
+  }
+
+  // NEW: Static Eraser Overlay
+  // Renders a static white box at the original location of erased text.
+  // This ensures the original text is covered even while the new text is being dragged elsewhere.
+  Widget _buildEraserOverlay() {
+    if (_localSelectionRect == null) return const SizedBox.shrink();
+
+    return Positioned(
+      left: _localSelectionRect!.left,
+      top: _localSelectionRect!.top,
+      child: IgnorePointer(
+        child: Container(
+          width: _localSelectionRect!.width,
+          height: _localSelectionRect!.height,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(4),
+             // No border, just clean text.
+            // border: Border.all(color: const Color(0xFFE94560), width: 1.5), 
+          ),
+        ),
+      ),
+    );
+  }
+
+  // NEW: Erase & Replace Drag Overlay - Completely separate UI
+  List<Widget> _buildEraseReplaceDragOverlay() {
+    return [
+      // Draggable Text
+      Positioned(
+        left: _dragOffset.dx,
+        top: _dragOffset.dy,
+        child: GestureDetector(
+          onPanUpdate: (details) {
+            setState(() {
+              _dragOffset += details.delta;
+            });
+          },
+          child: Container(
+            padding: EdgeInsets.zero,
+            decoration: BoxDecoration(
+              color: Colors.white, // Transparent background or white? White matches paper.
+              // border: Border.all(color: const Color(0xFFE94560), width: 1), // Thinner border?
+              // Let's keep border but make it tight.
+              border: Border.all(color: const Color(0xFFE94560), width: 1.5),
+              borderRadius: BorderRadius.circular(2),
+              // Remove shadow to look flat like ink? No, shadow helps visibility while dragging.
+            ),
+              child: Text(
+              _editingText,
+              style: TextStyle(
+                color: Colors.black,
+                fontSize: _editingFontSize * _editScaleFactor, // Apply Scale Factor!
+                fontWeight: _editingBold ? FontWeight.bold : FontWeight.normal,
+                fontStyle: _editingItalic ? FontStyle.italic : FontStyle.normal,
+                height: 1.0, 
+              ),
+            ),
+          ),
+        ),
+      ),
+
+      // Apply Button (floating at bottom)
+      Positioned(
+        left: 20,
+        bottom: 20,
+        right: 20,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            // Cancel Button
+            ElevatedButton.icon(
+              onPressed: () {
+                setState(() {
+                  _isDraggingEraseReplace = false;
+                  _isEraseReplaceDrag = false;
+                  _originalText = null;
+                });
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.grey[700],
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.cancel, size: 20),
+              label: const Text('Cancel', style: TextStyle(fontSize: 16)),
+            ),
+
+            // Apply Button
+            ElevatedButton.icon(
+              onPressed: _applyEraseReplaceEdit,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFE94560),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              icon: const Icon(Icons.check, size: 20),
+              label: const Text('Apply', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    ];
   }
 
   List<Widget> _buildManualEditOverlay() {
@@ -373,7 +555,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       // Zoom Toggle
                       _buildStyleToggle(
                         icon: Icons.zoom_in,
-                        isActive: _isZoomEnabled, // New state
+                        isActive: _isZoomEnabled,
                         onTap: () => setState(() => _isZoomEnabled = !_isZoomEnabled),
                       ),
                     ],
@@ -424,6 +606,70 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> _applyManualEdit() async {
+    // Use SIMPLE logic for Erase & Replace mode
+    if (_isEraseReplaceDrag) {
+      await _applyEraseReplaceEdit();
+      return;
+    }
+
+    // Original complex logic for drag-to-move mode
+    if (_selectedText == null && _originalText == null) return;
+    
+    setState(() => _isLoading = true);
+
+    DebugLogger.info('Applying Edit with Rotation', '$_pdfRotation degrees');
+
+    final pixelDelta = _dragOffset - _initialDragPos!;
+    double pdfDeltaX, pdfDeltaY;
+
+    if (_pdfRotation == 90) {
+      pdfDeltaX = pixelDelta.dy / _editScaleFactor;
+      pdfDeltaY = pixelDelta.dx / _editScaleFactor;
+    } else if (_pdfRotation == 180) {
+      pdfDeltaX = -pixelDelta.dx / _editScaleFactor;
+      pdfDeltaY = -pixelDelta.dy / _editScaleFactor;
+    } else if (_pdfRotation == 270) {
+      pdfDeltaX = -pixelDelta.dy / _editScaleFactor;
+      pdfDeltaY = -pixelDelta.dx / _editScaleFactor;
+    } else {
+      pdfDeltaX = pixelDelta.dx / _editScaleFactor;
+      pdfDeltaY = -pixelDelta.dy / _editScaleFactor;
+    }
+
+    DebugLogger.info('Delta Calc', 'Px: $pixelDelta, Scale: $_editScaleFactor -> PDF Delta: ($pdfDeltaX, $pdfDeltaY)');
+    
+    final newPath = await PdfService().replaceTextAdvanced(
+      path: _currentPath,
+      searchText: _selectedText ?? _originalText!,
+      newText: _editingText,
+      pageNumber: _pdfController.pageNumber - 1,
+      fontSize: _editingFontSize,
+      isBold: _editingBold,
+      isItalic: _editingItalic,
+      xOffset: pdfDeltaX,
+      yOffset: pdfDeltaY,
+    );
+    
+    setState(() {
+      _isLoading = false;
+      _isManualEditing = false;
+    });
+    
+    if (newPath != null && newPath != _currentPath) {
+      setState(() {
+        _currentPath = newPath;
+        _hasChanges = true;
+        _selectedText = null;
+        _selectionRect = null;
+      });
+      DebugLogger.success('Advanced Edit Applied');
+    } else {
+      DebugLogger.error('Edit Failed');
+    }
+  }
+
+  // BRAND NEW SIMPLE LOGIC - Erase & Replace only (OLD VERSION - BACKUP)
+  Future<void> _applyEraseReplaceEdit_OLD() async {
     setState(() => _isLoading = true);
     
     // Calculate Delta (Pixels -> PDF Points)
@@ -470,7 +716,7 @@ class _EditorScreenState extends State<EditorScreen> {
     
     final newPath = await PdfService().replaceTextAdvanced(
       path: _currentPath,
-      searchText: _selectedText!,
+      searchText: _selectedText ?? _originalText!, // Use original text if selected text is null
       newText: _editingText,
       pageNumber: _pdfController.pageNumber - 1,
       fontSize: _editingFontSize,
@@ -495,6 +741,151 @@ class _EditorScreenState extends State<EditorScreen> {
       DebugLogger.success('Advanced Edit Applied');
     } else {
       DebugLogger.error('Edit Failed');
+    }
+  }
+
+  // Base scale (Screen Pixels per PDF Point at Zoom Level 1.0)
+  double _baseScaleFactor = 1.0;
+
+  Future<void> _applyEraseReplaceEdit() async {
+    if (_originalText == null) return;
+    
+    // Safety check for calibration data
+    if (_localSelectionRect == null || _editingStyle == null || _document == null) {
+      DebugLogger.error('Missing calibration data (Rect: $_localSelectionRect, Style: $_editingStyle, Doc: $_document)');
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error: Calibration data lost. Please try again.')));
+      return;
+    }
+    
+    setState(() => _isLoading = true);
+
+    final pageIndex = _pdfController.pageNumber - 1;
+
+    // 1. Calibration: Derive Screen->PDF Matrix from Erased Text
+    final pdfStyle = _editingStyle!;
+    
+    // Calculate Scale (Screen Px per PDF Point)
+    // FIX: Use the carefully calculated _editScaleFactor which tracks Real Scale (Base * Zoom).
+    // Do NOT use _pdfController.zoomLevel directly as it is just a multiplier.
+    final scaleX = _editScaleFactor;
+    final scaleY = _editScaleFactor;
+    
+    // 3. ANCHOR METHOD (Pure Delta)
+    // We calculate the delta from the ORIGINAL Text Position to the NEW Drag Position.
+    // _localSelectionRect holds the Original Text Screen Rect (inflated by 2.0).
+    final originalScreenPos = _localSelectionRect!.deflate(2.0).topLeft;
+    
+    final visualDelta = _dragOffset - originalScreenPos;
+    
+    // Scale Delta to PDF Points
+    final pdfDeltaX = visualDelta.dx / scaleX;
+    final pdfDeltaY = visualDelta.dy / scaleY;
+    
+    DebugLogger.info('Anchor Logic', 'Original: $originalScreenPos, Current: $_dragOffset -> Visual Delta: $visualDelta');
+    DebugLogger.info('PDF Logic', 'PDF Delta: ($pdfDeltaX, $pdfDeltaY) scaled by ($scaleX, $scaleY)');
+    
+    // Apply Delta to Original PDF Coordinates
+    // X is LTR: +Delta adds to X
+    final targetPdfX = pdfStyle.x + pdfDeltaX;
+    
+    // Y is Baseline (Bottom-Up usually):
+    // Dragging DOWN (+Y) means moving closer to bottom (0). So we DECREASE Y.
+    
+    double targetPdfBaselineY;
+    if (pdfStyle.baselineY > 0) {
+       targetPdfBaselineY = pdfStyle.baselineY - pdfDeltaY;
+    } else {
+       targetPdfBaselineY = 0; 
+       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Error: Missing PDF Baseline data. Edit may be misplaced.')));
+       setState(() => _isLoading = false);
+       return;
+    }
+
+    final newPath = await PdfService().replaceTextAdvanced(
+      path: _currentPath,
+      searchText: _originalText!,
+      newText: _editingText,
+      pageNumber: pageIndex,
+      fontSize: _editingFontSize,
+      isBold: _editingBold,
+      isItalic: _editingItalic,
+      xOffset: targetPdfX,
+      yOffset: targetPdfBaselineY,
+      isAbsolutePositioning: true, // Use Absolute Logic
+    );
+    
+    setState(() {
+      _isLoading = false;
+      _isManualEditing = false;
+      _isEraseReplaceDrag = false;
+      _isDraggingEraseReplace = false;
+      _originalText = null;
+    });
+    
+    if (newPath != null && newPath != _currentPath) {
+      setState(() {
+        _currentPath = newPath;
+        _hasChanges = true;
+      });
+      
+      // Reload PDF
+      final doc = await NativePdfService.extractTextElements(_currentPath);
+      if (doc != null) {
+        setState(() {
+          _document = doc;
+          _pdfController.jumpToPage(pageIndex + 1);
+        });
+      }
+      DebugLogger.success('Erase & Replace Applied (Absolute)');
+    } else {
+      DebugLogger.error('Apply Failed');
+    }
+  }
+
+  Future<void> _applySimpleTextAddition() async {
+    if (_originalText == null || _placementPosition == null) return;
+
+    setState(() => _isLoading = true);
+
+    // Convert pixel position to PDF points (direct placement, no offset)
+    final double pdfX = _placementPosition!.dx / _editScaleFactor;
+    final double pdfY = -_placementPosition!.dy / _editScaleFactor; // Invert Y for PDF coordinates
+    
+    DebugLogger.info('Simple Text Addition', 'Position: ${_placementPosition} -> PDF: ($pdfX, $pdfY), Font: $_editingFontSize');
+    
+    final newPath = await PdfService().replaceTextAdvanced(
+      path: _currentPath,
+      searchText: _originalText!,
+      newText: _editingText,
+      pageNumber: _pdfController.pageNumber - 1,
+      fontSize: _editingFontSize,
+      isBold: _editingBold,
+      isItalic: _editingItalic,
+      xOffset: pdfX,
+      yOffset: pdfY,
+    );
+    
+    if (newPath != null && newPath != _currentPath) {
+      setState(() {
+        _isLoading = false;
+        _isAddingText = false;
+        _placementPosition = null;
+        _originalText = null;
+        _currentPath = newPath;
+        _hasChanges = true;
+      });
+      
+      // Reload the PDF
+      final doc = await NativePdfService.extractTextElements(_currentPath);
+      if (doc != null) {
+        setState(() {
+          _pdfController.jumpToPage(1);
+        });
+      }
+      DebugLogger.success('Simple Text Added');
+    } else {
+      setState(() => _isLoading = false);
+      DebugLogger.error('Text Addition Failed');
     }
   }
 
@@ -835,9 +1226,24 @@ class _EditorScreenState extends State<EditorScreen> {
           // PDF Viewer
           Expanded(
             flex: _showDebugPanel ? 2 : 1,
-            child: Stack(
-              key: _stackKey,
-              children: [
+            child: GestureDetector(
+              onTapUp: _isErased ? (details) {
+                // Convert tap position to local coordinates
+                final RenderBox? stackBox = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+                if (stackBox != null) {
+                  final localPosition = stackBox.globalToLocal(details.globalPosition);
+                  // Enter manual edit mode at tapped position
+                  setState(() {
+                    _isManualEditing = true;
+                    _dragOffset = localPosition;
+                    _initialDragPos = localPosition;
+                    _isErased = false; // Exit erase mode
+                  });
+                }
+              } : null,
+              child: Stack(
+                key: _stackKey,
+                children: [
                 SfPdfViewer.file(
                   File(_currentPath),
                   key: ValueKey(_currentPath),
@@ -845,6 +1251,19 @@ class _EditorScreenState extends State<EditorScreen> {
                   canShowTextSelectionMenu: false,  // Disabled - use our Edit Text button instead
                   enableTextSelection: !_isManualEditing, // Disable native selection while dragging
                   onTextSelectionChanged: _onTextSelectionChanged,
+                  onZoomLevelChanged: (details) {
+                     // CRITICAL: Track Zoom Level for Coordinate Math
+                     // Use Base Scale Factor to derive correct Pixels-Per-Point ratio
+                     setState(() {
+                        if (_baseScaleFactor > 0) {
+                           _editScaleFactor = _baseScaleFactor * details.newZoomLevel;
+                        } else {
+                           // Fallback if base not set (shouldn't happen in edit mode)
+                           _editScaleFactor = details.newZoomLevel;
+                        }
+                     });
+                     DebugLogger.info('Zoom Level Changed', 'New Scale Factor: $_editScaleFactor (Base: $_baseScaleFactor)');
+                  },
                 ),
                 
                 // Loading Overlay
@@ -868,10 +1287,265 @@ class _EditorScreenState extends State<EditorScreen> {
                     ),
                   ),
 
-                // Manual Edit Overlay (Drag & Controls)
-                if (_isManualEditing)
-                  ..._buildManualEditOverlay(),
+                // ERASE Button (appears when text is selected)
+                if (_selectedText != null && !_isManualEditing && !_isErased && _selectionRect != null)
+                  Positioned(
+                    left: _selectionRect!.center.dx - 50,
+                    top: _selectionRect!.bottom + 10,
+                    child: ElevatedButton.icon(
+                      onPressed: _eraseSelectedText,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFE94560),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      icon: const Icon(Icons.clear, size: 20),
+                      label: const Text('ERASE', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+
+                // ADD TEXT Button (appears after erase, waits for tap)
+                if (_isErased && !_isManualEditing)
+                  Positioned(
+                    left: 20,
+                    bottom: 100,
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Tap anywhere to add text',
+                            style: TextStyle(color: Colors.white, fontSize: 14),
+                          ),
+                          const SizedBox(height: 8),
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              // Cancel erase mode
+                              setState(() {
+                                _isErased = false;
+                                _localSelectionRect = null;
+                              });
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.grey[700],
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                            ),
+                            icon: const Icon(Icons.cancel, size: 18),
+                            label: const Text('Cancel'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                // White Eraser (appears when text is erased, waiting for placement)
+                if (_isErased && _localSelectionRect != null)
+                  Positioned(
+                    left: _localSelectionRect!.left,
+                    top: _localSelectionRect!.top,
+                    width: _localSelectionRect!.width,
+                    height: _localSelectionRect!.height,
+                    child: Container(
+                      color: Colors.white,
+                    ),
+                  ),
+
+                // Tap Capture Overlay (appears when waiting for placement after erase)
+                if (_isErased && !_isAddingText)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapUp: (details) {
+                        // Convert tap position to local coordinates
+                        final RenderBox? stackBox = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+                        if (stackBox != null) {
+                          final localPosition = stackBox.globalToLocal(details.globalPosition);
+                          // Enter simple add text mode at tapped position
+                          setState(() {
+                            _isAddingText = true;
+                            _placementPosition = localPosition;
+                            _isErased = false; // Exit erase mode
+                          });
+                        }
+                      },
+                      child: Container(color: Colors.transparent),
+                    ),
+                  ),
+
+                // Simple Add Text UI (Erase & Replace mode ONLY - separate from drag-to-move)
+                if (_isAddingText && _placementPosition != null)
+                  Positioned(
+                    // Clamp position to keep dialog within screen bounds
+                    left: (_placementPosition!.dx).clamp(0, MediaQuery.of(context).size.width - 340),
+                    top: (_placementPosition!.dy).clamp(0, MediaQuery.of(context).size.height - 400),
+                    child: Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1A1A2E),
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.3),
+                            blurRadius: 20,
+                            spreadRadius: 5,
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Title
+                          const Text(
+                            'Add Text',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          
+                          // Text Input
+                          Container(
+                            width: 300,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white10,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: TextField(
+                              controller: TextEditingController(text: _editingText),
+                              onChanged: (value) => _editingText = value,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: _editingFontSize,
+                                fontWeight: _editingBold ? FontWeight.bold : FontWeight.normal,
+                                fontStyle: _editingItalic ? FontStyle.italic : FontStyle.normal,
+                              ),
+                              decoration: const InputDecoration(
+                                border: InputBorder.none,
+                                hintText: 'Enter text...',
+                                hintStyle: TextStyle(color: Colors.white38),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          
+                          // Controls
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // Style Controls
+                              Row(
+                                children: [
+                                  _buildStyleToggle(
+                                    icon: Icons.format_bold,
+                                    isActive: _editingBold,
+                                    onTap: () => setState(() => _editingBold = !_editingBold),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  _buildStyleToggle(
+                                    icon: Icons.format_italic,
+                                    isActive: _editingItalic,
+                                    onTap: () => setState(() => _editingItalic = !_editingItalic),
+                                  ),
+                                ],
+                              ),
+                              
+                              // Font Size
+                              Row(
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.remove, color: Colors.white, size: 20),
+                                    onPressed: () => setState(() => _editingFontSize = (_editingFontSize - 1).clamp(8, 72)),
+                                  ),
+                                  Text(
+                                    _editingFontSize.toStringAsFixed(1),
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.add, color: Colors.white, size: 20),
+                                    onPressed: () => setState(() => _editingFontSize = (_editingFontSize + 1).clamp(8, 72)),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          
+                          // Action Buttons
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    _isAddingText = false;
+                                    _placementPosition = null;
+                                  });
+                                },
+                                child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+                              ),
+                              const SizedBox(width: 8),
+                              ElevatedButton(
+                                onPressed: () {
+                                  // Done typing - make text draggable in Erase & Replace mode
+                                  setState(() {
+                                    _isAddingText = false;
+                                    _isDraggingEraseReplace = true;
+                                    _isEraseReplaceDrag = true; // Flag for simple positioning
+                                    _dragOffset = _placementPosition!;
+                                    _initialDragPos = _placementPosition!;
+                                  });
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFE94560),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                                child: const Text('Done', style: TextStyle(fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                // NEW: Erase & Replace Drag UI (completely separate from manual edit)
+                if (_isDraggingEraseReplace)
+                  ..._buildEraseReplaceDragOverlay(),
+
+                  // Manual Edit Overlay (Drag & Controls) - for normal drag-to-move
+                  if (_isManualEditing)
+                    ..._buildManualEditOverlay(),
+
+                  // NEW: Eraser Overlay (Static White Box) - ALWAYS visible if erased
+                  if (_isErased)
+                    _buildEraserOverlay(),
+
+                  // NEW: Erase & Replace Drag UI (completely separate from manual edit)
+                  if (_isDraggingEraseReplace)
+                    ..._buildEraseReplaceDragOverlay(),
               ],
+            ),
             ),
           ),
           
