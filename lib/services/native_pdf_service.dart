@@ -394,28 +394,27 @@ class NativePdfService {
     // Create font with detected properties
     final font = PdfStandardFont(fontFamily, clampedFontSize, style: style);
     
-    DebugLogger.debug('Using font', '${fontFamily.name} size=$clampedFontSize style=$style');
+    // Draw new text with BASELINE-CORRECTED alignment
+    // Standard PDF drawing often adds top padding (ascent overlap).
+    // Moving UP by ~15% of font size usually aligns the baseline with the original text.
+    final textSize = font.measureString(newText);
+    final verticalOffset = textSize.height * 0.15;
+    final yPosition = bounds.top - verticalOffset;
     
-    // Calculate vertical offset for proper baseline alignment
-    // The bounds.top is the top of the text box, but text draws from baseline
-    // Moving up slightly to align with original text baseline
-    final verticalAdjustment = (bounds.height - clampedFontSize) * 0.3;
-    
-    // Draw new text with adjusted vertical position
     graphics.drawString(
       newText,
       font,
       brush: PdfSolidBrush(PdfColor(0, 0, 0)), // Black
       bounds: Rect.fromLTWH(
         bounds.left, 
-        bounds.top - verticalAdjustment, // Move up for proper alignment
+        yPosition,
         0, 
         0,
       ),
     );
     
     DebugLogger.debug('Overlay drawn', 
-      'font=${fontFamily.name} size=$clampedFontSize bold=${fontInfo.isBold} yOffset=${verticalAdjustment.toStringAsFixed(1)} at (${bounds.left.toStringAsFixed(1)}, ${(bounds.top - verticalAdjustment).toStringAsFixed(1)})');
+      'font=${fontFamily.name} size=$clampedFontSize bold=${fontInfo.isBold} y=$yPosition (top-0.15h) textH=${textSize.height.toStringAsFixed(1)} boundsH=${bounds.height.toStringAsFixed(1)}');
   }
 
   /// Match font name to closest PdfFontFamily
